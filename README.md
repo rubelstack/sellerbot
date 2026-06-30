@@ -22,7 +22,7 @@ A full-featured Telegram bot for selling products with inventory management, ord
 ### One Command Setup
 
 ```bash
-git clone https://github.com/yourusername/sellerbot.git
+git clone https://github.com/rubelstack/sellerbot.git
 cd sellerbot
 chmod +x setup.sh
 sudo ./setup.sh
@@ -48,7 +48,7 @@ python3 bot.py
 
 ```bash
 cd /opt
-git clone https://github.com/yourusername/sellerbot.git
+git clone https://github.com/rubelstack/sellerbot.git
 cd sellerbot
 chmod +x setup.sh
 sudo ./setup.sh
