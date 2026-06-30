@@ -74,7 +74,7 @@ async def show_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• {warranty}"
         )
 
-        markup = product_buy_button(product["id"]) if product["stock"] > 0 else None
+        markup = product_buy_button(product["id"])
 
         # Send with product image if available
         if product["image_path"] and os.path.exists(product["image_path"]):
