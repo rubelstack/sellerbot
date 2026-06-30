@@ -36,7 +36,7 @@ echo -e "${PURPLE}║${YELLOW}              ██╔═══╝ ██║     
 echo -e "${PURPLE}║${YELLOW}              ██║     ███████╗╚██████╔╝███████║              ${NC}"
 echo -e "${PURPLE}║${YELLOW}              ╚═╝     ╚══════╝ ╚═════╝ ╚══════╝              ${NC}"
 echo -e "${PURPLE}║                                                              ║${NC}"
-echo -e "${PURPLE}║${DIM}${WHITE}          Telegram Seller Bot • Setup Wizard v1.1.0         ${NC}"
+echo -e "${PURPLE}║${DIM}${WHITE}          Telegram Seller Bot • Setup Wizard v1.1.1         ${NC}"
 echo -e "${PURPLE}║${DIM}${GREEN}                   Made by Rubel 💚                         ${NC}"
 echo -e "${PURPLE}║                                                              ║${NC}"
 echo -e "${PURPLE}╚══════════════════════════════════════════════════════════════╝${NC}"
