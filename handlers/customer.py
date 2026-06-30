@@ -16,6 +16,7 @@ from database import (
 from utils.keyboard import (
     customer_keyboard, product_buy_button, buy_confirm_button,
     payment_done_button, admin_order_notification_buttons,
+    product_details_back_button,
 )
 from utils.helpers import (
     format_price, format_date, warranty_status_text, format_date_short,
@@ -43,10 +44,35 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ─── Product Browsing (Compact) ─────────────────────────────────────
+# ─── Product Card Format Helpers ─────────────────────────────────────
+
+def format_product_compact(product):
+    """Format compact product card (Name, Price, Stock only)."""
+    stock_status = f"🟢 {product['stock']} units available" if product["stock"] > 0 else "🔴 Out of Stock"
+    return (
+        f"🛍️ *Product:* {product['name']}\n"
+        f"💵 *Price:* {format_price(product['price'])}\n"
+        f"📦 *Stock:* {stock_status}"
+    )
+
+
+def format_product_details(product):
+    """Format full details view (Description & Warranty)."""
+    desc = product['description'] if product['description'] else "No description available."
+    warranty = f"🛡️ {product['warranty_days']} Days Warranty" if product['warranty_days'] > 0 else "🛡️ No Warranty"
+    warranty_info = f"\n📋 *Warranty Terms:*\n{product['warranty_details']}" if product['warranty_details'] else ""
+    return (
+        f"🌟 *{product['name']} — Details*\n"
+        f"──────────────────────────\n"
+        f"📄 *Description:*\n_{desc}_\n\n"
+        f"🛡️ *Warranty:* {warranty}{warranty_info}"
+    )
+
+
+# ─── Product Browsing ───────────────────────────────────────────────
 
 async def show_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show all available products to the customer (compact cards)."""
+    """Show all available products to the customer (compact cards with Details + Buy buttons)."""
     products = get_active_products()
 
     if not products:
@@ -57,21 +83,7 @@ async def show_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     for product in products:
-        # Stock status
-        stock_status = f"🟢 {product['stock']} units" if product["stock"] > 0 else "🔴 Out of Stock"
-
-        # Product details compilation
-        desc = product['description'] if product['description'] else "No description available."
-        warranty = f"🛡️ {product['warranty_days']} Days Warranty" if product['warranty_days'] > 0 else "🛡️ No Warranty"
-        
-        # Elegant decorated compact card layout
-        caption = (
-            f"🌟 *Name:* {product['name']}\n"
-            f"💵 *Price:* {format_price(product['price'])}\n"
-            f"📦 *Stock:* {stock_status}\n"
-            f"📝 *Product Details:* {desc} ({warranty})"
-        )
-
+        caption = format_product_compact(product)
         markup = product_buy_button(product["id"])
 
         # Send with product image if available
@@ -89,6 +101,68 @@ async def show_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown",
                 reply_markup=markup,
             )
+
+
+async def handle_details_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle details button press — edit card to show full description."""
+    query = update.callback_query
+    await query.answer()
+
+    product_id = int(query.data.split("_")[1])
+    product = get_product(product_id)
+
+    if not product:
+        await query.message.reply_text("❌ Product not found.")
+        return
+
+    text = format_product_details(product)
+    
+    try:
+        if query.message.photo:
+            await query.edit_message_caption(
+                caption=text,
+                parse_mode="Markdown",
+                reply_markup=product_details_back_button(product_id)
+            )
+        else:
+            await query.edit_message_text(
+                text=text,
+                parse_mode="Markdown",
+                reply_markup=product_details_back_button(product_id)
+            )
+    except Exception:
+        pass
+
+
+async def handle_view_card_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle back button press — edit card back to compact view."""
+    query = update.callback_query
+    await query.answer()
+
+    product_id = int(query.data.split("_")[2])
+    product = get_product(product_id)
+
+    if not product:
+        await query.message.reply_text("❌ Product not found.")
+        return
+
+    text = format_product_compact(product)
+    
+    try:
+        if query.message.photo:
+            await query.edit_message_caption(
+                caption=text,
+                parse_mode="Markdown",
+                reply_markup=product_buy_button(product_id)
+            )
+        else:
+            await query.edit_message_text(
+                text=text,
+                parse_mode="Markdown",
+                reply_markup=product_buy_button(product_id)
+            )
+    except Exception:
+        pass
 
 
 # ─── Purchase Flow ──────────────────────────────────────────────────

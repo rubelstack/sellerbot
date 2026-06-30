@@ -74,9 +74,19 @@ def close_chat_keyboard():
 # ─── Inline Keyboards ───────────────────────────────────────────────
 
 def product_buy_button(product_id: int):
-    """Inline buy button for a product."""
+    """Inline buy and details buttons for a product."""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🛒 Buy Now", callback_data=f"buy_{product_id}")]
+        [
+            InlineKeyboardButton("📄 Details", callback_data=f"details_{product_id}"),
+            InlineKeyboardButton("🛒 Buy Now", callback_data=f"buy_{product_id}"),
+        ]
+    ])
+
+
+def product_details_back_button(product_id: int):
+    """Back button for details view."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("« Back", callback_data=f"view_card_{product_id}")]
     ])
 
 

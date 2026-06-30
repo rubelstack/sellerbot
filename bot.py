@@ -19,6 +19,7 @@ from handlers.customer import (
     help_chat, forward_help_message,
     handle_buy_callback, handle_confirm_buy, handle_cancel_buy,
     handle_tx_hash_input, handle_payment_done, handle_payment_cancel,
+    handle_details_callback, handle_view_card_callback,
 )
 from handlers.admin import (
     admin_start, manage_products, show_inventory,
@@ -172,7 +173,11 @@ async def handle_callback(update: Update, context):
     query = update.callback_query
     data = query.data
 
-    if data.startswith("buy_"):
+    if data.startswith("details_"):
+        await handle_details_callback(update, context)
+    elif data.startswith("view_card_"):
+        await handle_view_card_callback(update, context)
+    elif data.startswith("buy_"):
         await handle_buy_callback(update, context)
     elif data.startswith("confirm_buy_"):
         await handle_confirm_buy(update, context)
