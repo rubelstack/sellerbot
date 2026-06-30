@@ -4,6 +4,8 @@ Reads credentials from .env file. Run setup.sh to configure.
 Made by Rubel
 """
 
+VERSION = "1.1.0"
+
 import os
 import sys
 

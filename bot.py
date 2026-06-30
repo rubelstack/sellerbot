@@ -10,7 +10,7 @@ from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, filters,
 )
-from config import BOT_TOKEN, ADMIN_CHAT_ID
+from config import BOT_TOKEN, ADMIN_CHAT_ID, VERSION
 from database import init_db, upsert_user
 
 from handlers.customer import (
@@ -244,7 +244,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     # ─── Start polling ───
-    logger.info("🚀 GET YOUR PLUS Bot is starting...")
+    logger.info(f"🚀 GET YOUR PLUS Bot v{VERSION} is starting...")
     logger.info(f"Admin Chat ID: {ADMIN_CHAT_ID}")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
