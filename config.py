@@ -50,7 +50,7 @@ ORDER_PREFIX = "GYP"
 ORDER_ID_LENGTH = 5
 
 # Currency symbol
-CURRENCY = "৳"
+CURRENCY = "$"
 
 # Database file path
 DB_PATH = "data/sellerbot.db"

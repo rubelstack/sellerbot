@@ -57,14 +57,31 @@ async def show_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     for product in products:
-        stock_text = f"📦 {product['stock']}" if product["stock"] > 0 else "❌ Sold Out"
-        warranty_text = f"🛡 {product['warranty_days']}d" if product["warranty_days"] > 0 else ""
+        # Stock status
+        if product["stock"] > 0:
+            stock_status = f"🟢 In Stock ({product['stock']} units)"
+        else:
+            stock_status = "🔴 Sold Out"
+            
+        # Warranty status
+        if product["warranty_days"] > 0:
+            warranty_status = f"🛡️ {product['warranty_days']} Days Warranty"
+        else:
+            warranty_status = "🛡️ No Warranty"
 
-        # Compact caption
+        # Decorated caption
         caption = (
-            f"*{product['name']}* — {format_price(product['price'])}\n"
-            f"{warranty_text}{' | ' if warranty_text else ''}{stock_text}"
+            f"✨ *{product['name']}* ✨\n"
+            f"──────────────────────────\n"
+            f"💰 Price: *{format_price(product['price'])}*\n"
+            f"📦 Stock: {stock_status}\n"
+            f"🛡️ Warranty: {warranty_status}\n"
         )
+        
+        if product["description"]:
+            caption += f"\n📝 *Description:*\n_{product['description']}_\n"
+            
+        caption += f"──────────────────────────"
 
         markup = product_buy_button(product["id"]) if product["stock"] > 0 else None
 
