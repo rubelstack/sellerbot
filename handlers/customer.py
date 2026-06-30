@@ -58,30 +58,21 @@ async def show_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     for product in products:
         # Stock status
-        if product["stock"] > 0:
-            stock_status = f"🟢 In Stock ({product['stock']} units)"
-        else:
-            stock_status = "🔴 Sold Out"
-            
-        # Warranty status
-        if product["warranty_days"] > 0:
-            warranty_status = f"🛡️ {product['warranty_days']} Days Warranty"
-        else:
-            warranty_status = "🛡️ No Warranty"
+        stock_status = f"🟢 {product['stock']} units" if product["stock"] > 0 else "🔴 Out of Stock"
 
-        # Decorated caption
-        caption = (
-            f"✨ *{product['name']}* ✨\n"
-            f"──────────────────────────\n"
-            f"💰 Price: *{format_price(product['price'])}*\n"
-            f"📦 Stock: {stock_status}\n"
-            f"🛡️ Warranty: {warranty_status}\n"
-        )
+        # Product details compilation
+        desc = product['description'] if product['description'] else "No description available."
+        warranty = f"🛡️ {product['warranty_days']} Days Warranty" if product['warranty_days'] > 0 else "🛡️ No Warranty"
         
-        if product["description"]:
-            caption += f"\n📝 *Description:*\n_{product['description']}_\n"
-            
-        caption += f"──────────────────────────"
+        # Elegant decorated card layout
+        caption = (
+            f"🛍️ *{product['name']}*\n"
+            f"💵 Price: *{format_price(product['price'])}*\n"
+            f"📦 Stock: {stock_status}\n\n"
+            f"📄 *Product Details:*\n"
+            f"• {desc}\n"
+            f"• {warranty}"
+        )
 
         markup = product_buy_button(product["id"]) if product["stock"] > 0 else None
 
