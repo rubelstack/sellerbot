@@ -1,6 +1,7 @@
 """
 GET YOUR PLUS — Keyboard Builders
-Reply keyboards for customer/admin and inline keyboards for products/orders.
+Reply keyboards for customer/admin and inline keyboards for products/orders/payments/chat.
+Made by Rubel
 """
 
 from telegram import (
@@ -30,7 +31,8 @@ def admin_keyboard():
     keyboard = [
         [KeyboardButton("➕ Add Product"), KeyboardButton("📦 Manage Products")],
         [KeyboardButton("📊 Inventory"), KeyboardButton("📋 Orders")],
-        [KeyboardButton("📢 Broadcast"), KeyboardButton("👥 Users")],
+        [KeyboardButton("💳 Payment Methods"), KeyboardButton("📢 Broadcast")],
+        [KeyboardButton("👥 Users")],
     ]
     return ReplyKeyboardMarkup(
         keyboard, resize_keyboard=True, one_time_keyboard=False
@@ -56,6 +58,14 @@ def skip_keyboard():
 def confirm_keyboard():
     """Confirm/Cancel keyboard."""
     keyboard = [[KeyboardButton("✅ Confirm"), KeyboardButton("❌ Cancel")]]
+    return ReplyKeyboardMarkup(
+        keyboard, resize_keyboard=True, one_time_keyboard=False
+    )
+
+
+def close_chat_keyboard():
+    """Reply keyboard for admin during active chat session."""
+    keyboard = [[KeyboardButton("🔚 Close Chat")]]
     return ReplyKeyboardMarkup(
         keyboard, resize_keyboard=True, one_time_keyboard=False
     )
@@ -131,6 +141,52 @@ def buy_confirm_button(product_id: int):
             ),
             InlineKeyboardButton("❌ Cancel", callback_data="cancel_buy"),
         ]
+    ])
+
+
+def payment_done_button(order_id: str):
+    """Payment Done inline button after customer submits tx hash."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "✅ Payment Done", callback_data=f"paydone_{order_id}"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "❌ Cancel Order", callback_data=f"paycancel_{order_id}"
+            ),
+        ],
+    ])
+
+
+def admin_order_notification_buttons(order_id: str, customer_chat_id: int):
+    """Admin order notification — confirm/reject/chat buttons."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "✅ Confirm Payment", callback_data=f"aconfirm_{order_id}"
+            ),
+            InlineKeyboardButton(
+                "❌ Reject", callback_data=f"areject_{order_id}"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "💬 Chat with Customer",
+                callback_data=f"achat_{customer_chat_id}",
+            ),
+        ],
+    ])
+
+
+def payment_method_manage_buttons(pm_id: int):
+    """Inline buttons for managing a payment method."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🗑 Delete", callback_data=f"pmdel_{pm_id}"),
+            InlineKeyboardButton("🔄 Toggle", callback_data=f"pmtoggle_{pm_id}"),
+        ],
     ])
 
 

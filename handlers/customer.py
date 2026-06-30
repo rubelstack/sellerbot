@@ -1,6 +1,7 @@
 """
 GET YOUR PLUS — Customer Handlers
-Handles all customer-facing interactions: browsing, purchasing, warranties, help.
+Handles all customer-facing interactions: browsing, purchasing, payments, warranties, help.
+Made by Rubel
 """
 
 import os
@@ -9,14 +10,20 @@ from telegram.ext import ContextTypes
 from config import ADMIN_CHAT_ID
 from database import (
     upsert_user, get_active_products, get_product, get_user_orders,
-    get_order_by_id, create_order,
+    get_order_by_id, create_order, get_active_payment_methods,
+    set_transaction_hash, cancel_expired_order, get_user,
 )
 from utils.keyboard import (
     customer_keyboard, product_buy_button, buy_confirm_button,
+    payment_done_button, admin_order_notification_buttons,
 )
 from utils.helpers import (
     format_price, format_date, warranty_status_text, format_date_short,
 )
+
+
+# ─── Payment timeout (seconds) ──────────────────────────────────────
+PAYMENT_TIMEOUT = 600  # 10 minutes
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -36,8 +43,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# ─── Product Browsing (Compact) ─────────────────────────────────────
+
 async def show_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show all available products to the customer."""
+    """Show all available products to the customer (compact cards)."""
     products = get_active_products()
 
     if not products:
@@ -47,27 +56,17 @@ async def show_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    await update.message.reply_text(
-        f"🛍 *Available Products* ({len(products)} items)\n"
-        "─────────────────────────",
-        parse_mode="Markdown",
-    )
-
     for product in products:
-        stock_text = f"📦 In Stock: {product['stock']}" if product["stock"] > 0 else "❌ Out of Stock"
-        warranty_text = (
-            f"🛡 {product['warranty_days']} days warranty"
-            if product["warranty_days"] > 0
-            else "🛡 No warranty"
+        stock_text = f"📦 {product['stock']}" if product["stock"] > 0 else "❌ Sold Out"
+        warranty_text = f"🛡 {product['warranty_days']}d" if product["warranty_days"] > 0 else ""
+
+        # Compact caption
+        caption = (
+            f"*{product['name']}* — {format_price(product['price'])}\n"
+            f"{warranty_text}{' | ' if warranty_text else ''}{stock_text}"
         )
 
-        caption = (
-            f"*{product['name']}*\n\n"
-            f"{product['description']}\n\n"
-            f"💰 Price: *{format_price(product['price'])}*\n"
-            f"{stock_text}\n"
-            f"{warranty_text}"
-        )
+        markup = product_buy_button(product["id"]) if product["stock"] > 0 else None
 
         # Send with product image if available
         if product["image_path"] and os.path.exists(product["image_path"]):
@@ -76,15 +75,17 @@ async def show_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     photo=photo,
                     caption=caption,
                     parse_mode="Markdown",
-                    reply_markup=product_buy_button(product["id"]) if product["stock"] > 0 else None,
+                    reply_markup=markup,
                 )
         else:
             await update.message.reply_text(
                 caption,
                 parse_mode="Markdown",
-                reply_markup=product_buy_button(product["id"]) if product["stock"] > 0 else None,
+                reply_markup=markup,
             )
 
+
+# ─── Purchase Flow ──────────────────────────────────────────────────
 
 async def handle_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle buy button press — show confirmation."""
@@ -95,11 +96,11 @@ async def handle_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     product = get_product(product_id)
 
     if not product:
-        await query.edit_message_text("❌ Product not found.")
+        await query.message.reply_text("❌ Product not found.")
         return
 
     if product["stock"] <= 0:
-        await query.edit_message_text("❌ Sorry, this product is now out of stock!")
+        await query.message.reply_text("❌ Sorry, this product is now out of stock!")
         return
 
     text = (
@@ -116,7 +117,7 @@ async def handle_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def handle_confirm_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle purchase confirmation."""
+    """Handle purchase confirmation — create order and show payment methods."""
     query = update.callback_query
     await query.answer()
 
@@ -124,6 +125,15 @@ async def handle_confirm_buy(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user = query.from_user
     upsert_user(user.id, user.username, user.first_name)
 
+    # Check payment methods exist
+    payment_methods = get_active_payment_methods()
+    if not payment_methods:
+        await query.edit_message_text(
+            "❌ No payment methods configured yet. Please contact support."
+        )
+        return
+
+    # Create order
     order_id, result = create_order(user.id, product_id)
 
     if order_id is None:
@@ -131,51 +141,194 @@ async def handle_confirm_buy(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     order = result
-    warranty_text = ""
-    if order["warranty_days"] and order["warranty_days"] > 0:
-        warranty_text = (
-            f"\n🛡 *Warranty:* {order['warranty_days']} days\n"
-            f"📅 *Expires:* {format_date_short(order['warranty_expiry'])}\n"
-            f"📋 *Details:* {order['warranty_details']}"
+
+    # Build payment methods text
+    pm_text = ""
+    for pm in payment_methods:
+        pm_text += f"  • *{pm['name']}*\n    `{pm['address']}`\n\n"
+
+    text = (
+        f"✅ *Order Created!*\n\n"
+        f"🆔 Order ID: `{order_id}`\n"
+        f"📦 {order['product_name']}\n"
+        f"💰 Amount: *{format_price(order['price'])}*\n\n"
+        f"{'─' * 25}\n"
+        f"💳 *Payment Methods:*\n\n"
+        f"{pm_text}"
+        f"{'─' * 25}\n\n"
+        f"⏳ You have *10 minutes* to complete payment.\n"
+        f"After payment, send your *Transaction Hash/ID* here."
+    )
+
+    await query.edit_message_text(text, parse_mode="Markdown")
+
+    # Set awaiting tx hash state
+    context.user_data["awaiting_tx_hash"] = order_id
+
+    # Schedule payment timeout (10 minutes)
+    context.job_queue.run_once(
+        payment_timeout_job,
+        PAYMENT_TIMEOUT,
+        data={"order_id": order_id, "chat_id": user.id},
+        name=f"payment_timeout_{order_id}",
+    )
+
+
+async def payment_timeout_job(context: ContextTypes.DEFAULT_TYPE):
+    """Auto-cancel order after payment timeout."""
+    job_data = context.job.data
+    order_id = job_data["order_id"]
+    chat_id = job_data["chat_id"]
+
+    cancelled = cancel_expired_order(order_id)
+    if cancelled:
+        try:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    f"⏰ *Payment Timeout!*\n\n"
+                    f"🆔 Order `{order_id}` has been cancelled because\n"
+                    f"payment was not completed within 10 minutes.\n\n"
+                    f"You can place a new order anytime."
+                ),
+                parse_mode="Markdown",
+            )
+        except Exception:
+            pass
+
+
+async def handle_tx_hash_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Process transaction hash from customer."""
+    order_id = context.user_data.get("awaiting_tx_hash")
+    if not order_id:
+        return False
+
+    tx_hash = update.message.text.strip()
+    if len(tx_hash) < 3:
+        await update.message.reply_text(
+            "❌ That doesn't look like a valid transaction hash. Please try again:"
         )
+        return True
 
-    receipt = (
-        f"✅ *Order Placed Successfully!*\n\n"
-        f"🆔 *Order ID:* `{order_id}`\n"
-        f"📦 *Product:* {order['product_name']}\n"
-        f"💰 *Price:* {format_price(order['price'])}\n"
-        f"📅 *Date:* {format_date(order['created_at'])}\n"
-        f"📊 *Status:* Pending"
-        f"{warranty_text}\n\n"
-        f"💡 Save your Order ID to check warranty status later!"
-    )
+    # Save tx hash
+    set_transaction_hash(order_id, tx_hash)
+    context.user_data["awaiting_tx_hash"] = None
+    context.user_data["awaiting_payment_done"] = order_id
+    context.user_data["tx_hash"] = tx_hash
 
-    await query.edit_message_text(receipt, parse_mode="Markdown")
-
-    # Notify admin
-    admin_msg = (
-        f"🔔 *New Order!*\n\n"
+    text = (
+        f"✅ *Transaction Hash Received!*\n\n"
         f"🆔 Order: `{order_id}`\n"
-        f"👤 Customer: {user.first_name} (@{user.username or 'N/A'})\n"
-        f"📦 Product: {order['product_name']}\n"
-        f"💰 Price: {format_price(order['price'])}"
+        f"🔗 TX Hash: `{tx_hash}`\n\n"
+        f"Click *Payment Done* when you've confirmed the transfer."
     )
+
+    await update.message.reply_text(
+        text, parse_mode="Markdown",
+        reply_markup=payment_done_button(order_id),
+    )
+    return True
+
+
+async def handle_payment_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle Payment Done button — notify admin with order details."""
+    query = update.callback_query
+    await query.answer("Payment submitted! ✅")
+
+    order_id = query.data.split("_")[1]
+    order = get_order_by_id(order_id)
+    user = query.from_user
+
+    if not order:
+        await query.edit_message_text("❌ Order not found.")
+        return
+
+    # Cancel the timeout job
+    jobs = context.job_queue.get_jobs_by_name(f"payment_timeout_{order_id}")
+    for job in jobs:
+        job.schedule_removal()
+
+    # Clear payment states
+    context.user_data.pop("awaiting_payment_done", None)
+    tx_hash = context.user_data.pop("tx_hash", order.get("transaction_hash", "N/A"))
+
+    # Confirm to customer
+    await query.edit_message_text(
+        f"✅ *Payment Submitted!*\n\n"
+        f"🆔 Order: `{order_id}`\n"
+        f"📦 {order['product_name']}\n"
+        f"💰 {format_price(order['price'])}\n"
+        f"🔗 TX: `{tx_hash}`\n\n"
+        f"⏳ Waiting for admin to verify your payment.\n"
+        f"You'll be notified once confirmed!",
+        parse_mode="Markdown",
+    )
+
+    # Get customer info
+    customer = get_user(user.id)
+    customer_name = customer["first_name"] if customer else user.first_name
+    customer_username = customer["username"] if customer else user.username
+
+    # Notify admin with order details + chat button
+    admin_msg = (
+        f"🔔 *New Payment Received!*\n\n"
+        f"🆔 Order: `{order_id}`\n"
+        f"📦 Product: {order['product_name']}\n"
+        f"💰 Amount: {format_price(order['price'])}\n"
+        f"🔗 TX Hash: `{tx_hash}`\n\n"
+        f"{'─' * 25}\n"
+        f"👤 *Customer Details:*\n"
+        f"  Name: {customer_name}\n"
+        f"  Username: @{customer_username or 'N/A'}\n"
+        f"  Chat ID: `{user.id}`\n"
+        f"{'─' * 25}"
+    )
+
     try:
         await context.bot.send_message(
             chat_id=ADMIN_CHAT_ID,
             text=admin_msg,
             parse_mode="Markdown",
+            reply_markup=admin_order_notification_buttons(order_id, user.id),
         )
     except Exception:
-        pass  # Admin notification is best-effort
+        pass
+
+
+async def handle_payment_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Customer cancels order during payment."""
+    query = update.callback_query
+    await query.answer()
+
+    order_id = query.data.split("_")[1]
+
+    # Cancel timeout job
+    jobs = context.job_queue.get_jobs_by_name(f"payment_timeout_{order_id}")
+    for job in jobs:
+        job.schedule_removal()
+
+    # Cancel order and restore stock
+    cancel_expired_order(order_id)
+
+    # Clear states
+    context.user_data.pop("awaiting_tx_hash", None)
+    context.user_data.pop("awaiting_payment_done", None)
+    context.user_data.pop("tx_hash", None)
+
+    await query.edit_message_text(
+        f"❌ Order `{order_id}` has been cancelled.",
+        parse_mode="Markdown",
+    )
 
 
 async def handle_cancel_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle purchase cancellation."""
+    """Handle purchase cancellation (before order creation)."""
     query = update.callback_query
     await query.answer()
     await query.edit_message_text("❌ Purchase cancelled.")
 
+
+# ─── My Purchases ───────────────────────────────────────────────────
 
 async def show_my_purchases(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show customer's purchase history."""
@@ -194,20 +347,20 @@ async def show_my_purchases(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     for order in orders:
         status_emoji = {
-            "pending": "⏳",
+            "awaiting_payment": "⏳",
+            "payment_sent": "💸",
             "confirmed": "✅",
             "shipped": "🚚",
             "completed": "✔️",
+            "rejected": "❌",
+            "expired": "⏰",
         }.get(order["status"], "❓")
 
         warranty = warranty_status_text(order["warranty_expiry"])
 
         text += (
-            f"🆔 `{order['order_id']}`\n"
-            f"📦 {order['product_name']}\n"
-            f"💰 {format_price(order['price'])}\n"
-            f"📅 {format_date(order['created_at'])}\n"
-            f"📊 Status: {status_emoji} {order['status'].title()}\n"
+            f"🆔 `{order['order_id']}` | {status_emoji} {order['status'].replace('_', ' ').title()}\n"
+            f"📦 {order['product_name']} — {format_price(order['price'])}\n"
             f"🛡 {warranty}\n"
             f"{'─' * 30}\n\n"
         )
@@ -224,6 +377,8 @@ async def show_my_purchases(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text, parse_mode="Markdown", reply_markup=customer_keyboard()
         )
 
+
+# ─── Warranty ────────────────────────────────────────────────────────
 
 async def show_warranty(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Prompt customer to enter order ID for warranty check."""
@@ -274,6 +429,8 @@ async def check_warranty_input(update: Update, context: ContextTypes.DEFAULT_TYP
     return True
 
 
+# ─── Help / Chat ────────────────────────────────────────────────────
+
 async def help_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Prompt customer to send a help message."""
     context.user_data["awaiting_help_message"] = True
@@ -301,10 +458,21 @@ async def forward_help_message(update: Update, context: ContextTypes.DEFAULT_TYP
     )
 
     try:
+        from utils.keyboard import admin_order_notification_buttons
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+        chat_btn = InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                "💬 Chat with Customer",
+                callback_data=f"achat_{user.id}",
+            )]
+        ])
+
         await context.bot.send_message(
             chat_id=ADMIN_CHAT_ID,
             text=admin_msg,
             parse_mode="Markdown",
+            reply_markup=chat_btn,
         )
         await update.message.reply_text(
             "✅ Your message has been sent to our support team!\n"

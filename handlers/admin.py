@@ -1,7 +1,8 @@
 """
 GET YOUR PLUS — Admin Handlers
-Handles admin panel: product management, inventory, orders, users.
+Handles admin panel: product management, payment methods, orders, users, chat system.
 Uses ConversationHandler for multi-step flows.
+Made by Rubel
 """
 
 import os
@@ -15,11 +16,15 @@ from database import (
     add_product, get_all_products, get_product, update_product_field,
     delete_product, toggle_product_active, get_all_orders,
     update_order_status, get_user_count, get_all_users,
+    get_order_by_id, confirm_order_payment, reject_order_payment,
+    add_payment_method, get_all_payment_methods, get_payment_method,
+    delete_payment_method, toggle_payment_method, get_user,
 )
 from utils.keyboard import (
     admin_keyboard, cancel_keyboard, skip_keyboard,
     product_manage_buttons, product_edit_buttons,
     order_status_buttons, delete_confirm_buttons,
+    payment_method_manage_buttons, close_chat_keyboard,
 )
 from utils.helpers import format_price, format_date
 
@@ -37,11 +42,16 @@ def is_admin(user_id: int) -> bool:
 
 (EDIT_VALUE,) = range(7, 8)
 
+# Payment method conversation states
+(PM_NAME, PM_ADDRESS) = range(8, 10)
+
 
 # ─── Admin Start ────────────────────────────────────────────────────
 
 async def admin_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show admin panel."""
+    if not is_admin(update.effective_user.id):
+        return
     await update.message.reply_text(
         "🔐 *Admin Panel — GET YOUR PLUS*\n\n"
         "Use the buttons below to manage your store 👇",
@@ -50,7 +60,9 @@ async def admin_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ─── Add Product Conversation ───────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════
+#  ADD PRODUCT CONVERSATION
+# ═══════════════════════════════════════════════════════════════════
 
 async def add_product_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start the Add Product wizard."""
@@ -199,7 +211,6 @@ async def add_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text and update.message.text.strip() == "⏭ Skip":
         pass  # No image
     elif update.message.photo:
-        # Download the highest resolution photo
         photo = update.message.photo[-1]
         os.makedirs(IMAGES_DIR, exist_ok=True)
         file = await photo.get_file()
@@ -214,7 +225,6 @@ async def add_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ADD_IMAGE
 
-    # Save to database
     product_id = add_product(
         name=product_data["name"],
         description=product_data.get("description", ""),
@@ -253,13 +263,16 @@ async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data.pop("new_product", None)
     context.user_data.pop("edit_product_id", None)
     context.user_data.pop("edit_field", None)
+    context.user_data.pop("new_pm", None)
     await update.message.reply_text(
         "❌ Cancelled.", reply_markup=admin_keyboard()
     )
     return ConversationHandler.END
 
 
-# ─── Manage Products ────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════
+#  MANAGE PRODUCTS
+# ═══════════════════════════════════════════════════════════════════
 
 async def manage_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """List all products with manage buttons."""
@@ -335,7 +348,7 @@ async def handle_edit_product(update: Update, context: ContextTypes.DEFAULT_TYPE
     text = (
         f"✏️ *Edit Product #{product_id}*\n\n"
         f"📦 Name: {product['name']}\n"
-        f"📄 Description: {product['description'] or 'N/A'}\n"
+        f"📄 Desc: {product['description'] or 'N/A'}\n"
         f"💰 Price: {format_price(product['price'])}\n"
         f"📊 Stock: {product['stock']}\n"
         f"🛡 Warranty: {product['warranty_days']} days\n"
@@ -355,7 +368,6 @@ async def handle_edit_field_callback(update: Update, context: ContextTypes.DEFAU
     await query.answer()
 
     data = query.data
-    # Parse: ename_1, edesc_1, eprice_1, estock_1, ewdays_1, ewinfo_1, eimg_1
     prefix = data.split("_")[0]
     product_id = int(data.split("_")[1])
 
@@ -429,7 +441,7 @@ async def handle_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await file.download_to_drive(image_path)
             update_product_field(product_id, "image_path", image_path)
             await update.message.reply_text(
-                f"✅ Product image updated!",
+                "✅ Product image updated!",
                 reply_markup=admin_keyboard(),
             )
         else:
@@ -440,7 +452,6 @@ async def handle_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         value = update.message.text.strip()
 
-        # Validate numeric fields
         if field in ("price",):
             try:
                 value = float(value)
@@ -466,7 +477,6 @@ async def handle_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=admin_keyboard(),
         )
 
-    # Clear edit state
     context.user_data.pop("edit_product_id", None)
     context.user_data.pop("edit_field", None)
     context.user_data.pop("edit_is_image", None)
@@ -540,7 +550,136 @@ async def handle_delete_cancel(update: Update, context: ContextTypes.DEFAULT_TYP
     )
 
 
-# ─── Inventory ──────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════
+#  PAYMENT METHODS MANAGEMENT
+# ═══════════════════════════════════════════════════════════════════
+
+async def show_payment_methods(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show all payment methods with manage buttons."""
+    if not is_admin(update.effective_user.id):
+        return
+
+    methods = get_all_payment_methods()
+    if not methods:
+        await update.message.reply_text(
+            "💳 No payment methods yet.\n"
+            "Use the button below to add one!\n\n"
+            "Type /addpayment to add a payment method.",
+            reply_markup=admin_keyboard(),
+        )
+        return
+
+    await update.message.reply_text(
+        f"💳 *Payment Methods* ({len(methods)} total)\n" + "─" * 30,
+        parse_mode="Markdown",
+    )
+
+    for pm in methods:
+        status = "🟢 Active" if pm["is_active"] else "🔴 Inactive"
+        text = (
+            f"*{pm['name']}*\n"
+            f"`{pm['address']}`\n"
+            f"Status: {status}"
+        )
+        await update.message.reply_text(
+            text, parse_mode="Markdown",
+            reply_markup=payment_method_manage_buttons(pm["id"]),
+        )
+
+    await update.message.reply_text(
+        "💡 Type /addpayment to add a new payment method.",
+        reply_markup=admin_keyboard(),
+    )
+
+
+async def add_payment_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start add payment method wizard."""
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+
+    context.user_data["new_pm"] = {}
+    await update.message.reply_text(
+        "💳 *Add Payment Method*\n\n"
+        "Enter the *payment method name*\n"
+        "(e.g. Binance BEP20, bKash, Nagad):",
+        parse_mode="Markdown",
+        reply_markup=cancel_keyboard(),
+    )
+    return PM_NAME
+
+
+async def add_pm_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Receive payment method name."""
+    context.user_data["new_pm"]["name"] = update.message.text.strip()
+    await update.message.reply_text(
+        "✅ Got it!\n\n"
+        "Now enter the *wallet/account address*\n"
+        "(e.g. 0xABC123... or 01XXXXXXXXX):",
+        parse_mode="Markdown",
+        reply_markup=cancel_keyboard(),
+    )
+    return PM_ADDRESS
+
+
+async def add_pm_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Receive payment method address and save."""
+    pm_data = context.user_data["new_pm"]
+    address = update.message.text.strip()
+
+    pm_id = add_payment_method(pm_data["name"], address)
+
+    await update.message.reply_text(
+        f"✅ *Payment Method Added!*\n\n"
+        f"💳 {pm_data['name']}\n"
+        f"`{address}`\n"
+        f"🆔 ID: {pm_id}",
+        parse_mode="Markdown",
+        reply_markup=admin_keyboard(),
+    )
+
+    context.user_data.pop("new_pm", None)
+    return ConversationHandler.END
+
+
+async def handle_pm_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Delete a payment method."""
+    query = update.callback_query
+    await query.answer()
+
+    pm_id = int(query.data.split("_")[1])
+    delete_payment_method(pm_id)
+    await query.edit_message_text("✅ Payment method deleted.")
+
+
+async def handle_pm_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Toggle payment method active/inactive."""
+    query = update.callback_query
+    await query.answer()
+
+    pm_id = int(query.data.split("_")[1])
+    new_status = toggle_payment_method(pm_id)
+
+    if new_status is None:
+        await query.edit_message_text("❌ Payment method not found.")
+        return
+
+    pm = get_payment_method(pm_id)
+    status = "🟢 Active" if new_status else "🔴 Inactive"
+    text = (
+        f"*{pm['name']}*\n"
+        f"`{pm['address']}`\n"
+        f"Status: {status}\n\n"
+        f"✅ Status updated!"
+    )
+    await query.edit_message_text(
+        text, parse_mode="Markdown",
+        reply_markup=payment_method_manage_buttons(pm_id),
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  ORDER MANAGEMENT (Admin confirms/rejects payments)
+# ═══════════════════════════════════════════════════════════════════
 
 async def show_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show inventory overview."""
@@ -583,8 +722,6 @@ async def show_inventory(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ─── Orders ─────────────────────────────────────────────────────────
-
 async def show_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show all orders for admin."""
     if not is_admin(update.effective_user.id):
@@ -602,26 +739,106 @@ async def show_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
     )
 
-    for order in orders[:20]:  # Show latest 20
+    for order in orders[:20]:
         status_emoji = {
-            "pending": "⏳",
+            "awaiting_payment": "⏳",
+            "payment_sent": "💸",
             "confirmed": "✅",
             "shipped": "🚚",
             "completed": "✔️",
+            "rejected": "❌",
+            "expired": "⏰",
         }.get(order["status"], "❓")
 
         text = (
-            f"🆔 `{order['order_id']}`\n"
-            f"👤 Chat ID: `{order['chat_id']}`\n"
-            f"📦 {order['product_name']}\n"
-            f"💰 {format_price(order['price'])}\n"
-            f"📅 {format_date(order['created_at'])}\n"
-            f"📊 {status_emoji} {order['status'].title()}"
+            f"🆔 `{order['order_id']}` | {status_emoji} {order['status'].replace('_', ' ').title()}\n"
+            f"👤 `{order['chat_id']}` | 📦 {order['product_name']}\n"
+            f"💰 {format_price(order['price'])} | 📅 {format_date(order['created_at'])}"
         )
+
+        if order["transaction_hash"]:
+            text += f"\n🔗 TX: `{order['transaction_hash']}`"
+
         await update.message.reply_text(
             text, parse_mode="Markdown",
             reply_markup=order_status_buttons(order["order_id"]),
         )
+
+
+async def handle_admin_confirm_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin confirms a customer's payment."""
+    query = update.callback_query
+    await query.answer("Payment confirmed! ✅")
+
+    order_id = query.data.split("_")[1]
+    confirm_order_payment(order_id)
+    order = get_order_by_id(order_id)
+
+    # Update admin message
+    await query.edit_message_text(
+        query.message.text + "\n\n✅ *PAYMENT CONFIRMED*",
+        parse_mode="Markdown",
+    )
+
+    # Notify customer
+    if order:
+        try:
+            warranty_text = ""
+            if order["warranty_expiry"]:
+                from utils.helpers import format_date_short, warranty_status_text
+                warranty_text = (
+                    f"\n🛡 Warranty: {warranty_status_text(order['warranty_expiry'])}\n"
+                    f"📅 Expires: {format_date_short(order['warranty_expiry'])}"
+                )
+                if order["warranty_details"]:
+                    warranty_text += f"\n📋 Terms: {order['warranty_details']}"
+
+            await context.bot.send_message(
+                chat_id=order["chat_id"],
+                text=(
+                    f"✅ *Payment Confirmed!*\n\n"
+                    f"🆔 Order: `{order_id}`\n"
+                    f"📦 {order['product_name']}\n"
+                    f"💰 {format_price(order['price'])}"
+                    f"{warranty_text}\n\n"
+                    f"Thank you for your purchase! 🎉"
+                ),
+                parse_mode="Markdown",
+            )
+        except Exception:
+            pass
+
+
+async def handle_admin_reject_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin rejects a customer's payment."""
+    query = update.callback_query
+    await query.answer("Payment rejected.")
+
+    order_id = query.data.split("_")[1]
+    reject_order_payment(order_id)
+    order = get_order_by_id(order_id)
+
+    await query.edit_message_text(
+        query.message.text + "\n\n❌ *PAYMENT REJECTED — Stock restored*",
+        parse_mode="Markdown",
+    )
+
+    # Notify customer
+    if order:
+        try:
+            await context.bot.send_message(
+                chat_id=order["chat_id"],
+                text=(
+                    f"❌ *Payment Rejected*\n\n"
+                    f"🆔 Order: `{order_id}`\n"
+                    f"📦 {order['product_name']}\n\n"
+                    f"Your payment could not be verified.\n"
+                    f"Please contact support if you believe this is an error."
+                ),
+                parse_mode="Markdown",
+            )
+        except Exception:
+            pass
 
 
 async def handle_order_status_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -630,7 +847,6 @@ async def handle_order_status_callback(update: Update, context: ContextTypes.DEF
     await query.answer()
 
     data = query.data
-    # oconfirm_GYP-XXXXX, oshipped_GYP-XXXXX, ocomplete_GYP-XXXXX
     parts = data.split("_", 1)
     action = parts[0]
     order_id = parts[1]
@@ -655,12 +871,9 @@ async def handle_order_status_callback(update: Update, context: ContextTypes.DEF
     }.get(new_status, "❓")
 
     text = (
-        f"🆔 `{order['order_id']}`\n"
-        f"👤 Chat ID: `{order['chat_id']}`\n"
-        f"📦 {order['product_name']}\n"
-        f"💰 {format_price(order['price'])}\n"
-        f"📅 {format_date(order['created_at'])}\n"
-        f"📊 {status_emoji} {new_status.title()}\n\n"
+        f"🆔 `{order['order_id']}` | {status_emoji} {new_status.title()}\n"
+        f"👤 `{order['chat_id']}` | 📦 {order['product_name']}\n"
+        f"💰 {format_price(order['price'])}\n\n"
         f"✅ Status updated!"
     )
     await query.edit_message_text(
@@ -684,7 +897,134 @@ async def handle_order_status_callback(update: Update, context: ContextTypes.DEF
         pass
 
 
-# ─── Users ──────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════
+#  ADMIN ↔ CUSTOMER CHAT SYSTEM
+# ═══════════════════════════════════════════════════════════════════
+
+async def start_chat_with_customer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin clicks Chat button — enter chat mode with customer."""
+    query = update.callback_query
+    await query.answer()
+
+    customer_chat_id = int(query.data.split("_")[1])
+    customer = get_user(customer_chat_id)
+    customer_name = customer["first_name"] if customer else "Customer"
+    customer_username = customer["username"] if customer else None
+
+    # Store active chat in bot_data (shared across all users)
+    context.bot_data["admin_chat_with"] = customer_chat_id
+
+    await query.message.reply_text(
+        f"💬 *Chat Mode Active*\n\n"
+        f"👤 Chatting with: {customer_name} (@{customer_username or 'N/A'})\n"
+        f"🆔 Chat ID: `{customer_chat_id}`\n\n"
+        f"All your messages will be forwarded to this customer.\n"
+        f"Press 🔚 *Close Chat* when you're done.",
+        parse_mode="Markdown",
+        reply_markup=close_chat_keyboard(),
+    )
+
+    # Notify customer
+    try:
+        await context.bot.send_message(
+            chat_id=customer_chat_id,
+            text=(
+                "💬 *Support Chat Started*\n\n"
+                "An admin has connected with you.\n"
+                "You can now send messages and they'll be forwarded to support."
+            ),
+            parse_mode="Markdown",
+        )
+    except Exception:
+        pass
+
+
+async def close_admin_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin closes the chat session."""
+    customer_chat_id = context.bot_data.get("admin_chat_with")
+
+    context.bot_data.pop("admin_chat_with", None)
+
+    await update.message.reply_text(
+        "🔚 Chat closed.",
+        reply_markup=admin_keyboard(),
+    )
+
+    # Notify customer
+    if customer_chat_id:
+        try:
+            await context.bot.send_message(
+                chat_id=customer_chat_id,
+                text="💬 *Chat Ended*\n\nThe support session has been closed. Thank you!",
+                parse_mode="Markdown",
+            )
+        except Exception:
+            pass
+
+
+async def forward_admin_message_to_customer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Forward admin's message to the customer they're chatting with."""
+    customer_chat_id = context.bot_data.get("admin_chat_with")
+    if not customer_chat_id:
+        return False
+
+    try:
+        if update.message.photo:
+            photo = update.message.photo[-1]
+            await context.bot.send_photo(
+                chat_id=customer_chat_id,
+                photo=photo.file_id,
+                caption=f"💬 *Support:*\n{update.message.caption or ''}",
+                parse_mode="Markdown",
+            )
+        elif update.message.text:
+            await context.bot.send_message(
+                chat_id=customer_chat_id,
+                text=f"💬 *Support:*\n{update.message.text}",
+                parse_mode="Markdown",
+            )
+        return True
+    except Exception:
+        await update.message.reply_text(
+            "❌ Failed to send message to customer.",
+            reply_markup=close_chat_keyboard(),
+        )
+        return True
+
+
+async def forward_customer_message_to_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Forward customer's message to admin during active chat."""
+    user_id = update.effective_user.id
+    admin_chatting_with = context.bot_data.get("admin_chat_with")
+
+    if admin_chatting_with != user_id:
+        return False
+
+    user = update.effective_user
+
+    try:
+        if update.message.photo:
+            photo = update.message.photo[-1]
+            await context.bot.send_photo(
+                chat_id=ADMIN_CHAT_ID,
+                photo=photo.file_id,
+                caption=f"👤 *{user.first_name}:*\n{update.message.caption or ''}",
+                parse_mode="Markdown",
+            )
+        elif update.message.text:
+            await context.bot.send_message(
+                chat_id=ADMIN_CHAT_ID,
+                text=f"👤 *{user.first_name}:*\n{update.message.text}",
+                parse_mode="Markdown",
+            )
+        return True
+    except Exception:
+        return False
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  USERS
+# ═══════════════════════════════════════════════════════════════════
 
 async def show_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show user statistics."""
@@ -700,7 +1040,7 @@ async def show_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{'─' * 30}\n\n"
     )
 
-    for user in users[:20]:  # Show latest 20
+    for user in users[:20]:
         text += (
             f"👤 {user['first_name'] or 'N/A'} "
             f"(@{user['username'] or 'N/A'})\n"
@@ -716,7 +1056,9 @@ async def show_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ─── Build Conversation Handlers ────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════
+#  BUILD CONVERSATION HANDLERS
+# ═══════════════════════════════════════════════════════════════════
 
 def get_add_product_handler():
     """Create the Add Product conversation handler."""
@@ -769,6 +1111,33 @@ def get_add_product_handler():
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ Cancel$"),
                     add_image,
+                ),
+            ],
+        },
+        fallbacks=[
+            MessageHandler(filters.Regex("^❌ Cancel$"), cancel_conversation),
+            CommandHandler("cancel", cancel_conversation),
+        ],
+    )
+
+
+def get_add_payment_handler():
+    """Create the Add Payment Method conversation handler."""
+    return ConversationHandler(
+        entry_points=[
+            CommandHandler("addpayment", add_payment_start),
+        ],
+        states={
+            PM_NAME: [
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ Cancel$"),
+                    add_pm_name,
+                ),
+            ],
+            PM_ADDRESS: [
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ Cancel$"),
+                    add_pm_address,
                 ),
             ],
         },

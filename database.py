@@ -1,6 +1,7 @@
 """
 GET YOUR PLUS — Database Layer
 SQLite3 setup, schema creation, and CRUD helpers.
+Made by Rubel
 """
 
 import sqlite3
@@ -57,16 +58,37 @@ def init_db():
             quantity          INTEGER NOT NULL DEFAULT 1,
             warranty_expiry   TEXT,
             warranty_details  TEXT DEFAULT '',
-            status            TEXT NOT NULL DEFAULT 'pending',
+            status            TEXT NOT NULL DEFAULT 'awaiting_payment',
+            transaction_hash  TEXT DEFAULT '',
+            payment_status    TEXT NOT NULL DEFAULT 'awaiting_payment',
             created_at        TEXT NOT NULL,
             FOREIGN KEY (chat_id) REFERENCES users(chat_id),
             FOREIGN KEY (product_id) REFERENCES products(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS payment_methods (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL,
+            address     TEXT NOT NULL,
+            is_active   INTEGER NOT NULL DEFAULT 1,
+            created_at  TEXT NOT NULL
         );
 
         CREATE INDEX IF NOT EXISTS idx_orders_chat_id ON orders(chat_id);
         CREATE INDEX IF NOT EXISTS idx_orders_order_id ON orders(order_id);
         CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
     """)
+
+    # Migration: add new columns to existing orders table if missing
+    try:
+        cursor.execute("SELECT transaction_hash FROM orders LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE orders ADD COLUMN transaction_hash TEXT DEFAULT ''")
+
+    try:
+        cursor.execute("SELECT payment_status FROM orders LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE orders ADD COLUMN payment_status TEXT NOT NULL DEFAULT 'awaiting_payment'")
 
     conn.commit()
     conn.close()
@@ -104,6 +126,14 @@ def get_user_count():
     count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
     conn.close()
     return count
+
+
+def get_user(chat_id: int):
+    """Get a single user."""
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM users WHERE chat_id = ?", (chat_id,)).fetchone()
+    conn.close()
+    return row
 
 
 # ─── Product CRUD ────────────────────────────────────────────────────
@@ -195,7 +225,7 @@ def toggle_product_active(product_id: int):
 
 def create_order(chat_id: int, product_id: int):
     """
-    Create a new order. Decrements stock.
+    Create a new order with status 'awaiting_payment'. Decrements stock.
     Returns (order_id, order_dict) or (None, error_message).
     """
     conn = get_connection()
@@ -228,8 +258,9 @@ def create_order(chat_id: int, product_id: int):
     conn.execute(
         """INSERT INTO orders 
            (order_id, chat_id, product_id, product_name, price, quantity,
-            warranty_expiry, warranty_details, status, created_at)
-           VALUES (?, ?, ?, ?, ?, 1, ?, ?, 'pending', ?)""",
+            warranty_expiry, warranty_details, status, transaction_hash,
+            payment_status, created_at)
+           VALUES (?, ?, ?, ?, ?, 1, ?, ?, 'awaiting_payment', '', 'awaiting_payment', ?)""",
         (order_id, chat_id, product_id, product["name"], product["price"],
          warranty_expiry, product["warranty_details"], now),
     )
@@ -242,16 +273,79 @@ def create_order(chat_id: int, product_id: int):
     order = {
         "order_id": order_id,
         "product_name": product["name"],
+        "product_id": product_id,
         "price": product["price"],
         "warranty_expiry": warranty_expiry,
         "warranty_details": product["warranty_details"],
         "warranty_days": product["warranty_days"],
         "created_at": now,
-        "status": "pending",
+        "status": "awaiting_payment",
     }
     
     conn.close()
     return order_id, order
+
+
+def set_transaction_hash(order_id: str, tx_hash: str):
+    """Set the transaction hash for an order."""
+    conn = get_connection()
+    conn.execute(
+        "UPDATE orders SET transaction_hash = ?, payment_status = 'payment_sent' WHERE order_id = ?",
+        (tx_hash, order_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def confirm_order_payment(order_id: str):
+    """Admin confirms payment — mark order as confirmed."""
+    conn = get_connection()
+    conn.execute(
+        "UPDATE orders SET status = 'confirmed', payment_status = 'confirmed' WHERE order_id = ?",
+        (order_id,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def reject_order_payment(order_id: str):
+    """Admin rejects payment — mark order as rejected, restore stock."""
+    conn = get_connection()
+    order = conn.execute(
+        "SELECT * FROM orders WHERE order_id = ?", (order_id,)
+    ).fetchone()
+    if order:
+        conn.execute(
+            "UPDATE orders SET status = 'rejected', payment_status = 'rejected' WHERE order_id = ?",
+            (order_id,),
+        )
+        conn.execute(
+            "UPDATE products SET stock = stock + 1 WHERE id = ?",
+            (order["product_id"],),
+        )
+        conn.commit()
+    conn.close()
+
+
+def cancel_expired_order(order_id: str):
+    """Cancel an expired order and restore stock."""
+    conn = get_connection()
+    order = conn.execute(
+        "SELECT * FROM orders WHERE order_id = ? AND payment_status = 'awaiting_payment'",
+        (order_id,),
+    ).fetchone()
+    if order:
+        conn.execute(
+            "UPDATE orders SET status = 'expired', payment_status = 'expired' WHERE order_id = ?",
+            (order_id,),
+        )
+        conn.execute(
+            "UPDATE products SET stock = stock + 1 WHERE id = ?",
+            (order["product_id"],),
+        )
+        conn.commit()
+    conn.close()
+    return order is not None
 
 
 def get_user_orders(chat_id: int):
@@ -293,7 +387,8 @@ def get_all_orders(status_filter: str = None):
 
 def update_order_status(order_id: str, new_status: str):
     """Update order status."""
-    allowed = {"pending", "confirmed", "shipped", "completed"}
+    allowed = {"awaiting_payment", "payment_sent", "confirmed", "shipped",
+               "completed", "rejected", "expired"}
     if new_status not in allowed:
         raise ValueError(f"Invalid status: {new_status}")
     
@@ -303,3 +398,74 @@ def update_order_status(order_id: str, new_status: str):
     )
     conn.commit()
     conn.close()
+
+
+# ─── Payment Methods CRUD ───────────────────────────────────────────
+
+def add_payment_method(name: str, address: str):
+    """Add a new payment method. Returns the ID."""
+    conn = get_connection()
+    cursor = conn.execute(
+        "INSERT INTO payment_methods (name, address, is_active, created_at) VALUES (?, ?, 1, ?)",
+        (name, address, datetime.now().isoformat()),
+    )
+    pm_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return pm_id
+
+
+def get_active_payment_methods():
+    """Get all active payment methods."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM payment_methods WHERE is_active = 1 ORDER BY id"
+    ).fetchall()
+    conn.close()
+    return rows
+
+
+def get_all_payment_methods():
+    """Get all payment methods."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM payment_methods ORDER BY id"
+    ).fetchall()
+    conn.close()
+    return rows
+
+
+def get_payment_method(pm_id: int):
+    """Get a single payment method."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM payment_methods WHERE id = ?", (pm_id,)
+    ).fetchone()
+    conn.close()
+    return row
+
+
+def delete_payment_method(pm_id: int):
+    """Delete a payment method."""
+    conn = get_connection()
+    conn.execute("DELETE FROM payment_methods WHERE id = ?", (pm_id,))
+    conn.commit()
+    conn.close()
+
+
+def toggle_payment_method(pm_id: int):
+    """Toggle payment method active status. Returns new status."""
+    conn = get_connection()
+    current = conn.execute(
+        "SELECT is_active FROM payment_methods WHERE id = ?", (pm_id,)
+    ).fetchone()
+    if current is None:
+        conn.close()
+        return None
+    new_status = 0 if current["is_active"] else 1
+    conn.execute(
+        "UPDATE payment_methods SET is_active = ? WHERE id = ?", (new_status, pm_id)
+    )
+    conn.commit()
+    conn.close()
+    return new_status

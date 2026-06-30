@@ -1,6 +1,7 @@
 """
 GET YOUR PLUS — Main Bot Entry Point
 Initializes the bot, registers all handlers, and starts polling.
+Made by Rubel
 """
 
 import logging
@@ -17,16 +18,21 @@ from handlers.customer import (
     show_warranty, check_warranty_input,
     help_chat, forward_help_message,
     handle_buy_callback, handle_confirm_buy, handle_cancel_buy,
+    handle_tx_hash_input, handle_payment_done, handle_payment_cancel,
 )
 from handlers.admin import (
     admin_start, manage_products, show_inventory,
-    show_orders, show_users,
+    show_orders, show_users, show_payment_methods,
     handle_toggle_product, handle_edit_product,
     handle_edit_field_callback, handle_edit_value,
     handle_edit_back,
     handle_delete_product, handle_delete_confirm, handle_delete_cancel,
     handle_order_status_callback,
-    get_add_product_handler, is_admin,
+    handle_admin_confirm_payment, handle_admin_reject_payment,
+    start_chat_with_customer, close_admin_chat,
+    forward_admin_message_to_customer, forward_customer_message_to_admin,
+    handle_pm_delete, handle_pm_toggle,
+    get_add_product_handler, get_add_payment_handler, is_admin,
 )
 from handlers.broadcast import (
     get_broadcast_handler,
@@ -57,9 +63,33 @@ async def handle_message(update: Update, context):
     # Register user
     upsert_user(user_id, user.username, user.first_name)
 
+    # ─── Check if active chat session exists ───
+    # Admin active chat session
+    if is_admin(user_id):
+        # Admin wants to close chat
+        if text == "🔚 Close Chat":
+            await close_admin_chat(update, context)
+            return
+        
+        # Admin is typing message to customer
+        in_chat = await forward_admin_message_to_customer(update, context)
+        if in_chat:
+            return
+    else:
+        # Customer sending message to admin during active chat
+        in_chat = await forward_customer_message_to_admin(update, context)
+        if in_chat:
+            return
+
     # ─── Check if awaiting edit input (admin) ───
     if is_admin(user_id) and context.user_data.get("edit_product_id"):
         handled = await handle_edit_value(update, context)
+        if handled:
+            return
+
+    # ─── Check if awaiting tx hash input (customer) ───
+    if context.user_data.get("awaiting_tx_hash"):
+        handled = await handle_tx_hash_input(update, context)
         if handled:
             return
 
@@ -85,6 +115,9 @@ async def handle_message(update: Update, context):
             return
         elif text == "📋 Orders":
             await show_orders(update, context)
+            return
+        elif text == "💳 Payment Methods":
+            await show_payment_methods(update, context)
             return
         elif text == "👥 Users":
             await show_users(update, context)
@@ -114,8 +147,18 @@ async def handle_message(update: Update, context):
 
 
 async def handle_photo_message(update: Update, context):
-    """Handle photo messages (for admin edit image flow)."""
+    """Handle photo messages (for admin edit image and active chats)."""
     user_id = update.effective_user.id
+
+    # Active chat forwarding
+    if is_admin(user_id):
+        in_chat = await forward_admin_message_to_customer(update, context)
+        if in_chat:
+            return
+    else:
+        in_chat = await forward_customer_message_to_admin(update, context)
+        if in_chat:
+            return
 
     if is_admin(user_id) and context.user_data.get("edit_is_image"):
         await handle_edit_value(update, context)
@@ -135,6 +178,10 @@ async def handle_callback(update: Update, context):
         await handle_confirm_buy(update, context)
     elif data == "cancel_buy":
         await handle_cancel_buy(update, context)
+    elif data.startswith("paydone_"):
+        await handle_payment_done(update, context)
+    elif data.startswith("paycancel_"):
+        await handle_payment_cancel(update, context)
     elif data.startswith("toggle_"):
         await handle_toggle_product(update, context)
     elif data.startswith("edit_"):
@@ -149,6 +196,16 @@ async def handle_callback(update: Update, context):
         await handle_delete_confirm(update, context)
     elif data.startswith("delcancel_"):
         await handle_delete_cancel(update, context)
+    elif data.startswith("aconfirm_"):
+        await handle_admin_confirm_payment(update, context)
+    elif data.startswith("areject_"):
+        await handle_admin_reject_payment(update, context)
+    elif data.startswith("achat_"):
+        await start_chat_with_customer(update, context)
+    elif data.startswith("pmdel_"):
+        await handle_pm_delete(update, context)
+    elif data.startswith("pmtoggle_"):
+        await handle_pm_toggle(update, context)
     elif data.startswith(("oconfirm_", "oshipped_", "ocomplete_")):
         await handle_order_status_callback(update, context)
     elif data == "broadcast_confirm":
@@ -165,11 +222,12 @@ def main():
     init_db()
     logger.info("Database initialized.")
 
-    # Build application
+    # Build application (job-queue is enabled automatically if requirements.txt contains python-telegram-bot[job-queue])
     app = Application.builder().token(BOT_TOKEN).build()
 
     # ─── Conversation handlers (must be added FIRST) ───
     app.add_handler(get_add_product_handler())
+    app.add_handler(get_add_payment_handler())
     app.add_handler(get_broadcast_handler())
 
     # ─── Command handlers ───
@@ -179,7 +237,7 @@ def main():
     # ─── Callback query handler ───
     app.add_handler(CallbackQueryHandler(handle_callback))
 
-    # ─── Photo message handler ───
+    # ─── Photo/Media message handler ───
     app.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND, handle_photo_message))
 
     # ─── General text message handler (catch-all, must be LAST) ───
