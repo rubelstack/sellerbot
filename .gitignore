@@ -1,0 +1,15 @@
+# ─── Dependencies & Environment ───
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# ─── Data (generated at runtime) ───
+data/
+*.db
+
+# ─── IDE / OS ───
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,195 @@
+"""
+GET YOUR PLUS — Main Bot Entry Point
+Initializes the bot, registers all handlers, and starts polling.
+"""
+
+import logging
+from telegram import Update
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler,
+    CallbackQueryHandler, filters,
+)
+from config import BOT_TOKEN, ADMIN_CHAT_ID
+from database import init_db, upsert_user
+
+from handlers.customer import (
+    start_command, show_products, show_my_purchases,
+    show_warranty, check_warranty_input,
+    help_chat, forward_help_message,
+    handle_buy_callback, handle_confirm_buy, handle_cancel_buy,
+)
+from handlers.admin import (
+    admin_start, manage_products, show_inventory,
+    show_orders, show_users,
+    handle_toggle_product, handle_edit_product,
+    handle_edit_field_callback, handle_edit_value,
+    handle_edit_back,
+    handle_delete_product, handle_delete_confirm, handle_delete_cancel,
+    handle_order_status_callback,
+    get_add_product_handler, is_admin,
+)
+from handlers.broadcast import (
+    get_broadcast_handler,
+    broadcast_confirm, broadcast_cancel,
+)
+from utils.keyboard import customer_keyboard, admin_keyboard
+
+
+# ─── Logging ─────────────────────────────────────────────────────────
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
+
+
+# ─── Message Router ──────────────────────────────────────────────────
+
+async def handle_message(update: Update, context):
+    """Route text messages based on user type and context."""
+    if not update.message or not update.message.text:
+        return
+
+    user = update.effective_user
+    text = update.message.text.strip()
+    user_id = user.id
+
+    # Register user
+    upsert_user(user_id, user.username, user.first_name)
+
+    # ─── Check if awaiting edit input (admin) ───
+    if is_admin(user_id) and context.user_data.get("edit_product_id"):
+        handled = await handle_edit_value(update, context)
+        if handled:
+            return
+
+    # ─── Check if awaiting warranty check (customer) ───
+    if context.user_data.get("awaiting_warranty_check"):
+        handled = await check_warranty_input(update, context)
+        if handled:
+            return
+
+    # ─── Check if awaiting help message (customer) ───
+    if context.user_data.get("awaiting_help_message"):
+        handled = await forward_help_message(update, context)
+        if handled:
+            return
+
+    # ─── Admin button routing ───
+    if is_admin(user_id):
+        if text == "📦 Manage Products":
+            await manage_products(update, context)
+            return
+        elif text == "📊 Inventory":
+            await show_inventory(update, context)
+            return
+        elif text == "📋 Orders":
+            await show_orders(update, context)
+            return
+        elif text == "👥 Users":
+            await show_users(update, context)
+            return
+
+    # ─── Customer button routing ───
+    if text == "🛍 Products":
+        await show_products(update, context)
+    elif text == "🛒 My Purchases":
+        await show_my_purchases(update, context)
+    elif text == "🛡 Warranty":
+        await show_warranty(update, context)
+    elif text == "💬 Help / Chat":
+        await help_chat(update, context)
+    else:
+        # Unknown text — show appropriate keyboard
+        if is_admin(user_id):
+            await update.message.reply_text(
+                "Use the buttons below to navigate 👇",
+                reply_markup=admin_keyboard(),
+            )
+        else:
+            await update.message.reply_text(
+                "Use the buttons below to navigate 👇",
+                reply_markup=customer_keyboard(),
+            )
+
+
+async def handle_photo_message(update: Update, context):
+    """Handle photo messages (for admin edit image flow)."""
+    user_id = update.effective_user.id
+
+    if is_admin(user_id) and context.user_data.get("edit_is_image"):
+        await handle_edit_value(update, context)
+        return
+
+
+# ─── Callback Router ────────────────────────────────────────────────
+
+async def handle_callback(update: Update, context):
+    """Route inline button callback queries."""
+    query = update.callback_query
+    data = query.data
+
+    if data.startswith("buy_"):
+        await handle_buy_callback(update, context)
+    elif data.startswith("confirm_buy_"):
+        await handle_confirm_buy(update, context)
+    elif data == "cancel_buy":
+        await handle_cancel_buy(update, context)
+    elif data.startswith("toggle_"):
+        await handle_toggle_product(update, context)
+    elif data.startswith("edit_"):
+        await handle_edit_product(update, context)
+    elif data.startswith(("ename_", "edesc_", "eprice_", "estock_", "ewdays_", "ewinfo_", "eimg_")):
+        await handle_edit_field_callback(update, context)
+    elif data.startswith("eback_"):
+        await handle_edit_back(update, context)
+    elif data.startswith("del_"):
+        await handle_delete_product(update, context)
+    elif data.startswith("delconfirm_"):
+        await handle_delete_confirm(update, context)
+    elif data.startswith("delcancel_"):
+        await handle_delete_cancel(update, context)
+    elif data.startswith(("oconfirm_", "oshipped_", "ocomplete_")):
+        await handle_order_status_callback(update, context)
+    elif data == "broadcast_confirm":
+        await broadcast_confirm(update, context)
+    elif data == "broadcast_cancel":
+        await broadcast_cancel(update, context)
+
+
+# ─── Main ────────────────────────────────────────────────────────────
+
+def main():
+    """Initialize and run the bot."""
+    # Initialize database
+    init_db()
+    logger.info("Database initialized.")
+
+    # Build application
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    # ─── Conversation handlers (must be added FIRST) ───
+    app.add_handler(get_add_product_handler())
+    app.add_handler(get_broadcast_handler())
+
+    # ─── Command handlers ───
+    app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("admin", admin_start))
+
+    # ─── Callback query handler ───
+    app.add_handler(CallbackQueryHandler(handle_callback))
+
+    # ─── Photo message handler ───
+    app.add_handler(MessageHandler(filters.PHOTO & ~filters.COMMAND, handle_photo_message))
+
+    # ─── General text message handler (catch-all, must be LAST) ───
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    # ─── Start polling ───
+    logger.info("🚀 GET YOUR PLUS Bot is starting...")
+    logger.info(f"Admin Chat ID: {ADMIN_CHAT_ID}")
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+
+
+if __name__ == "__main__":
+    main()
