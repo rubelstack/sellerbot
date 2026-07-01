@@ -21,6 +21,8 @@ from handlers.customer import (
     handle_tx_hash_input, handle_payment_done, handle_payment_cancel,
     handle_details_callback, handle_view_card_callback,
     handle_claim_warranty,
+    handle_apply_coupon_callback, handle_buy_no_coupon_callback,
+    handle_confirm_buy_coupon_callback, handle_coupon_code_input,
 )
 from handlers.admin import (
     admin_start, manage_products, show_inventory,
@@ -35,6 +37,7 @@ from handlers.admin import (
     forward_admin_message_to_customer, forward_customer_message_to_admin,
     handle_pm_delete, handle_pm_toggle,
     get_add_product_handler, get_add_payment_handler, is_admin,
+    show_coupons, handle_coupon_delete, get_add_coupon_handler,
 )
 from handlers.broadcast import (
     get_broadcast_handler,
@@ -96,6 +99,12 @@ async def handle_message(update: Update, context):
         if handled:
             return
 
+    # ─── Check if awaiting coupon code input (customer) ───
+    if context.user_data.get("awaiting_coupon_code"):
+        handled = await handle_coupon_code_input(update, context)
+        if handled:
+            return
+
     # ─── Check if awaiting warranty check (customer) ───
     if context.user_data.get("awaiting_warranty_check"):
         handled = await check_warranty_input(update, context)
@@ -121,6 +130,9 @@ async def handle_message(update: Update, context):
             return
         elif btn_text == "💳 Payment Methods":
             await show_payment_methods(update, context)
+            return
+        elif btn_text == "🎟️ Coupons":
+            await show_coupons(update, context)
             return
         elif btn_text == "👥 Users":
             await show_users(update, context)
@@ -181,6 +193,14 @@ async def handle_callback(update: Update, context):
         await handle_view_card_callback(update, context)
     elif data.startswith("buy_"):
         await handle_buy_callback(update, context)
+    elif data.startswith("apply_coupon_"):
+        await handle_apply_coupon_callback(update, context)
+    elif data.startswith("buy_no_coupon_"):
+        await handle_buy_no_coupon_callback(update, context)
+    elif data.startswith("conf_buy_cp_"):
+        await handle_confirm_buy_coupon_callback(update, context)
+    elif data.startswith("cpdel_"):
+        await handle_coupon_delete(update, context)
     elif data.startswith("claimw_"):
         await handle_claim_warranty(update, context)
     elif data.startswith("paydone_"):
@@ -233,6 +253,7 @@ def main():
     # ─── Conversation handlers (must be added FIRST) ───
     app.add_handler(get_add_product_handler())
     app.add_handler(get_add_payment_handler())
+    app.add_handler(get_add_coupon_handler())
     app.add_handler(get_broadcast_handler())
 
     # ─── Command handlers ───

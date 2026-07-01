@@ -19,13 +19,14 @@ from database import (
     get_order_by_id, confirm_order_payment, reject_order_payment,
     add_payment_method, get_all_payment_methods, get_payment_method,
     delete_payment_method, toggle_payment_method, get_user,
+    add_coupon, get_coupon, get_all_coupons, delete_coupon,
 )
 from utils.keyboard import (
     admin_keyboard, cancel_keyboard, skip_keyboard,
     product_manage_buttons, product_edit_buttons,
     order_status_buttons, delete_confirm_buttons,
     payment_method_manage_buttons, close_chat_keyboard,
-    admin_chat_only_button,
+    admin_chat_only_button, coupon_management_keyboard,
 )
 from utils.helpers import format_price, format_date
 
@@ -45,6 +46,9 @@ def is_admin(user_id: int) -> bool:
 
 # Payment method conversation states
 (PM_NAME, PM_ADDRESS) = range(8, 10)
+
+# Coupon conversation states
+(CP_CODE, CP_DISCOUNT, CP_LIMIT) = range(10, 13)
 
 
 # ─── Admin Start ────────────────────────────────────────────────────
@@ -265,6 +269,7 @@ async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data.pop("edit_product_id", None)
     context.user_data.pop("edit_field", None)
     context.user_data.pop("new_pm", None)
+    context.user_data.pop("new_coupon", None)
     await update.message.reply_text(
         "❌ Cancelled.", reply_markup=admin_keyboard()
     )
@@ -1157,6 +1162,188 @@ def get_add_payment_handler():
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ Cancel$"),
                     add_pm_address,
+                ),
+            ],
+        },
+        fallbacks=[
+            MessageHandler(filters.Regex("^❌ Cancel$"), cancel_conversation),
+            CommandHandler("cancel", cancel_conversation),
+        ],
+    )
+
+
+# ─── Coupon Management ───────────────────────────────────────────────
+
+async def show_coupons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show all coupons with management buttons."""
+    if not is_admin(update.effective_user.id):
+        return
+
+    coupons = get_all_coupons()
+    if not coupons:
+        await update.message.reply_text(
+            "🎟️ No coupons created yet.\n"
+            "Use `/addcoupon` or click below to add one!\n\n"
+            "Type /addcoupon to add a new coupon code.",
+            reply_markup=admin_keyboard(),
+        )
+        return
+
+    await update.message.reply_text(
+        f"🎟️ *Coupons* ({len(coupons)} total)\n" + "─" * 30,
+        parse_mode="Markdown",
+    )
+
+    for cp in coupons:
+        status = "🟢 Active" if cp["is_active"] else "🔴 Inactive"
+        if cp["used_count"] >= cp["usage_limit"]:
+            status = "🔴 Exhausted (Limit reached)"
+
+        text = (
+            f"🎟️ Code: *{cp['code']}*\n"
+            f"💰 Discount: {format_price(cp['discount'])}\n"
+            f"📊 Used: *{cp['used_count']} / {cp['usage_limit']}* times\n"
+            f"Status: {status}"
+        )
+        await update.message.reply_text(
+            text, parse_mode="Markdown",
+            reply_markup=coupon_management_keyboard(cp["code"]),
+        )
+
+    await update.message.reply_text(
+        "💡 Type /addcoupon to add a new coupon code.",
+        reply_markup=admin_keyboard(),
+    )
+
+
+async def add_coupon_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start add coupon wizard."""
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+
+    context.user_data["new_coupon"] = {}
+    await update.message.reply_text(
+        "🎟️ *Add New Coupon*\n\n"
+        "Step 1/3: Enter the *coupon code / custom word*\n"
+        "(e.g. WELCOME10, SAVE50):",
+        parse_mode="Markdown",
+        reply_markup=cancel_keyboard(),
+    )
+    return CP_CODE
+
+
+async def add_coupon_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Receive coupon code."""
+    code = update.message.text.strip().upper()
+    if not code.isalnum():
+        await update.message.reply_text(
+            "❌ Code must be alphanumeric (letters and numbers, no spaces):"
+        )
+        return CP_CODE
+
+    context.user_data["new_coupon"]["code"] = code
+    await update.message.reply_text(
+        f"✅ Got it: *{code}*\n\n"
+        "Step 2/3: Enter the *discount amount* (flat number, e.g. 5.50 or 10):",
+        parse_mode="Markdown",
+        reply_markup=cancel_keyboard(),
+    )
+    return CP_DISCOUNT
+
+
+async def add_coupon_discount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Receive coupon discount."""
+    try:
+        discount = float(update.message.text.strip())
+        if discount <= 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Please enter a valid positive number for discount:"
+        )
+        return CP_DISCOUNT
+
+    context.user_data["new_coupon"]["discount"] = discount
+    await update.message.reply_text(
+        f"✅ Discount set to *{format_price(discount)}*\n\n"
+        "Step 3/3: Enter *usage limit* (number of times it can be used, e.g. 100):",
+        parse_mode="Markdown",
+        reply_markup=cancel_keyboard(),
+    )
+    return CP_LIMIT
+
+
+async def add_coupon_limit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Receive usage limit and save coupon."""
+    cp_data = context.user_data["new_coupon"]
+    try:
+        limit = int(update.message.text.strip())
+        if limit <= 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Please enter a valid positive integer for usage limit:"
+        )
+        return CP_LIMIT
+
+    success = add_coupon(cp_data["code"], cp_data["discount"], limit)
+
+    if success:
+        await update.message.reply_text(
+            f"✅ *Coupon Added Successfully!*\n\n"
+            f"🎟️ Code: *{cp_data['code']}*\n"
+            f"💰 Discount: {format_price(cp_data['discount'])}\n"
+            f"📊 Limit: {limit} uses",
+            parse_mode="Markdown",
+            reply_markup=admin_keyboard(),
+        )
+    else:
+        await update.message.reply_text(
+            "❌ A coupon with that code already exists. Process aborted.",
+            reply_markup=admin_keyboard(),
+        )
+
+    context.user_data.pop("new_coupon", None)
+    return ConversationHandler.END
+
+
+async def handle_coupon_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Delete a coupon."""
+    query = update.callback_query
+    await query.answer()
+
+    code = query.data.split("_")[1]
+    delete_coupon(code)
+    await query.edit_message_text(f"✅ Coupon *{code}* deleted.", parse_mode="Markdown")
+
+
+def get_add_coupon_handler():
+    """Create the Add Coupon conversation handler."""
+    return ConversationHandler(
+        entry_points=[
+            CommandHandler("addcoupon", add_coupon_start),
+            MessageHandler(
+                filters.Regex("^🎟️ Coupons$") & filters.User(ADMIN_CHAT_ID),
+                show_coupons,
+            ),
+        ],
+        states={
+            CP_CODE: [
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ Cancel$"),
+                    add_coupon_code,
+                ),
+            ],
+            CP_DISCOUNT: [
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ Cancel$"),
+                    add_coupon_discount,
+                ),
+            ],
+            CP_LIMIT: [
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND & ~filters.Regex("^❌ Cancel$"),
+                    add_coupon_limit,
                 ),
             ],
         },

@@ -13,7 +13,7 @@ from config import ADMIN_CHAT_ID
 from database import (
     upsert_user, get_active_products, get_product, get_user_orders,
     get_order_by_id, create_order, get_active_payment_methods,
-    set_transaction_hash, cancel_expired_order, get_user,
+    set_transaction_hash, cancel_expired_order, get_user, get_coupon,
 )
 from utils.keyboard import (
     customer_keyboard, product_buy_button, buy_confirm_button,
@@ -187,7 +187,7 @@ async def handle_view_card_callback(update: Update, context: ContextTypes.DEFAUL
 # ─── Purchase Flow ──────────────────────────────────────────────────
 
 async def handle_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle buy button press — directly create order and show payment details."""
+    """Handle buy button press — show option to apply coupon code or skip."""
     query = update.callback_query
     await query.answer()
 
@@ -212,8 +212,172 @@ async def handle_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return
 
-    # Create order
-    order_id, result = create_order(user.id, product_id)
+    from utils.keyboard import coupon_options_keyboard
+
+    # Show purchase options (Apply Coupon / Skip Coupon)
+    text = (
+        f"🛒 *Confirm Purchase: {html.escape(product['name'])}*\n\n"
+        f"💵 Price: *{format_price(product['price'])}*\n\n"
+        f"Do you want to apply a coupon code for a discount?"
+    )
+
+    try:
+        if query.message.photo:
+            await query.edit_message_caption(
+                caption=text,
+                parse_mode="HTML",
+                reply_markup=coupon_options_keyboard(product_id)
+            )
+        else:
+            await query.edit_message_text(
+                text=text,
+                parse_mode="HTML",
+                reply_markup=coupon_options_keyboard(product_id)
+            )
+    except Exception:
+        await query.message.reply_text(
+            text, parse_mode="HTML", reply_markup=coupon_options_keyboard(product_id)
+        )
+
+
+async def handle_apply_coupon_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Prompt the customer to input the coupon code."""
+    query = update.callback_query
+    await query.answer()
+
+    product_id = int(query.data.split("_")[2])
+    product = get_product(product_id)
+    if not product:
+        await query.message.reply_text("❌ Product not found.")
+        return
+
+    context.user_data["awaiting_coupon_code"] = product_id
+
+    # Prompt user
+    await query.message.reply_text(
+        f"🎟️ Please enter/send the coupon code for *{html.escape(product['name'])}* below:",
+        parse_mode="HTML",
+    )
+
+
+async def handle_buy_no_coupon_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Directly buy a product without a coupon code."""
+    query = update.callback_query
+    await query.answer()
+
+    product_id = int(query.data.split("_")[3])
+    await process_purchase(update, context, product_id)
+
+
+async def handle_confirm_buy_coupon_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Confirm purchasing a product with a coupon code."""
+    query = update.callback_query
+    await query.answer()
+
+    parts = query.data.split("_")
+    product_id = int(parts[3])
+    coupon_code = parts[4]
+
+    await process_purchase(update, context, product_id, coupon_code)
+
+
+async def handle_coupon_code_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Process coupon code inputted by customer."""
+    product_id = context.user_data.get("awaiting_coupon_code")
+    if not product_id:
+        return False
+
+    coupon_code_raw = update.message.text.strip().upper()
+
+    # Cancel if menu button pressed or command entered
+    menu_buttons = {
+        "🛍 Products", "🛒 My Purchases", "🛡 Warranty", "💬 Help / Chat",
+        "➕ Add Product", "📦 Manage Products", "📊 Inventory", "📋 Orders",
+        "💳 Payment Methods", "🎟️ Coupons", "📢 Broadcast", "👥 Users", "/start", "/admin"
+    }
+    if coupon_code_raw in menu_buttons or coupon_code_raw.startswith("/"):
+        context.user_data.pop("awaiting_coupon_code", None)
+        return False
+
+    # Get product
+    product = get_product(product_id)
+    if not product:
+        context.user_data.pop("awaiting_coupon_code", None)
+        await update.message.reply_text("❌ Product not found.")
+        return True
+
+    # Validate coupon code
+    coupon = get_coupon(coupon_code_raw)
+
+    if not coupon or not coupon["is_active"]:
+        await update.message.reply_text(
+            "❌ Invalid coupon code. Please try again or type a menu option to cancel:"
+        )
+        return True
+
+    if coupon["used_count"] >= coupon["usage_limit"]:
+        await update.message.reply_text(
+            "❌ This coupon code has reached its usage limit. Please try another code:"
+        )
+        return True
+
+    # Coupon is valid! Clear state and show discounted confirmation screen.
+    context.user_data.pop("awaiting_coupon_code", None)
+
+    discount = coupon["discount"]
+    new_price = max(0.0, product["price"] - discount)
+
+    from utils.keyboard import coupon_confirm_keyboard
+    confirm_text = (
+        f"🎟️ *Coupon Applied successfully!*\n\n"
+        f"📦 Product: *{html.escape(product['name'])}*\n"
+        f"💵 Original Price: *{format_price(product['price'])}*\n"
+        f"🎟️ Discount: -*{format_price(discount)}*\n"
+        f"💰 Final Price: *{format_price(new_price)}*\n\n"
+        f"Confirm purchase?"
+    )
+
+    await update.message.reply_text(
+        confirm_text, parse_mode="Markdown",
+        reply_markup=coupon_confirm_keyboard(product_id, coupon_code_raw)
+    )
+    return True
+
+
+async def process_purchase(update: Update, context: ContextTypes.DEFAULT_TYPE, product_id: int, coupon_code: str = None):
+    """Create the order and show payment screen."""
+    query = update.callback_query
+    user = query.from_user
+    upsert_user(user.id, user.username, user.first_name)
+
+    product = get_product(product_id)
+    if not product:
+        await query.message.reply_text("❌ Product not found.")
+        return
+
+    if product["stock"] <= 0:
+        await query.message.reply_text("❌ Sorry, this product is now out of stock!")
+        return
+
+    payment_methods = get_active_payment_methods()
+    if not payment_methods:
+        await query.message.reply_text(
+            "❌ No payment methods configured yet. Please contact support."
+        )
+        return
+
+    # Check coupon details if coupon_code is provided
+    discount_amount = 0.0
+    if coupon_code:
+        coupon = get_coupon(coupon_code)
+        if coupon and coupon["is_active"] and coupon["used_count"] < coupon["usage_limit"]:
+            discount_amount = coupon["discount"]
+        else:
+            await query.message.reply_text("❌ Coupon code is invalid or has expired.")
+            return
+
+    # Create order in database
+    order_id, result = create_order(user.id, product_id, coupon_code, discount_amount)
     if order_id is None:
         await query.message.reply_text(f"❌ {result}")
         return
@@ -225,21 +389,19 @@ async def handle_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     for pm in payment_methods:
         pm_text += f"  • *{pm['name']}*\n    `{pm['address']}`\n\n"
 
-    text = (
-        f"✅ *Order Created!*\n\n"
-        f"🆔 Order ID: `{order_id}`\n"
-        f"📦 {order['product_name']}\n"
-        f"💰 Amount: *{format_price(order['price'])}*\n\n"
-        f"{'─' * 25}\n"
-        f"💳 *Payment Methods:*\n\n"
-        f"{pm_text}"
-        f"{'─' * 25}\n\n"
-        f"⏳ You have *10 minutes* to complete payment.\n"
-        f"After payment, send your *Transaction Hash/ID* here."
+    # Generate initial text with countdown
+    text = get_payment_screen_text(
+        order_id=order_id,
+        product_name=order["product_name"],
+        price=order["price"],
+        pm_text=pm_text,
+        coupon_code=coupon_code,
+        discount_amount=discount_amount,
+        seconds_left=PAYMENT_TIMEOUT
     )
 
     # Reply with payment info and a cancel order button
-    await query.message.reply_text(
+    sent_message = await query.edit_message_text(
         text, parse_mode="Markdown",
         reply_markup=payment_screen_buttons(order_id)
     )
@@ -255,11 +417,31 @@ async def handle_buy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         name=f"payment_timeout_{order_id}",
     )
 
+    # Schedule payment countdown (repeating every 60 seconds)
+    context.job_queue.run_repeating(
+        payment_countdown_job,
+        interval=60,
+        first=60,
+        data={
+            "order_id": order_id,
+            "chat_id": user.id,
+            "message_id": sent_message.message_id,
+            "product_name": order['product_name'],
+            "price": order['price'],
+            "pm_text": pm_text,
+            "coupon_code": coupon_code,
+            "discount_amount": discount_amount,
+            "seconds_left": PAYMENT_TIMEOUT
+        },
+        name=f"payment_countdown_{order_id}",
+    )
+
     # Notify admin about new order (awaiting payment)
     admin_msg = (
         f"🔔 *New Order Created!*\n\n"
         f"🆔 Order: `{order_id}`\n"
         f"📦 Product: {order['product_name']}\n"
+        f"{coupon_info}"
         f"💰 Amount: {format_price(order['price'])}\n"
         f"⏳ Status: Awaiting Payment\n\n"
         f"{'─' * 25}\n"
@@ -286,6 +468,11 @@ async def payment_timeout_job(context: ContextTypes.DEFAULT_TYPE):
     job_data = context.job.data
     order_id = job_data["order_id"]
     chat_id = job_data["chat_id"]
+
+    # Cancel countdown job
+    countdown_jobs = context.job_queue.get_jobs_by_name(f"payment_countdown_{order_id}")
+    for job in countdown_jobs:
+        job.schedule_removal()
 
     cancelled = cancel_expired_order(order_id)
     if cancelled:
@@ -333,10 +520,11 @@ async def handle_tx_hash_input(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data.pop("awaiting_payment_done", None)
     context.user_data.pop("tx_hash", None)
 
-    # Cancel the timeout job
-    jobs = context.job_queue.get_jobs_by_name(f"payment_timeout_{order_id}")
-    for job in jobs:
-        job.schedule_removal()
+    # Cancel the timeout and countdown jobs
+    for suffix in ["timeout", "countdown"]:
+        jobs = context.job_queue.get_jobs_by_name(f"payment_{suffix}_{order_id}")
+        for job in jobs:
+            job.schedule_removal()
 
     order = get_order_by_id(order_id)
     if not order:
@@ -402,10 +590,11 @@ async def handle_payment_cancel(update: Update, context: ContextTypes.DEFAULT_TY
 
     order_id = query.data.split("_")[1]
 
-    # Cancel timeout job
-    jobs = context.job_queue.get_jobs_by_name(f"payment_timeout_{order_id}")
-    for job in jobs:
-        job.schedule_removal()
+    # Cancel timeout and countdown jobs
+    for suffix in ["timeout", "countdown"]:
+        jobs = context.job_queue.get_jobs_by_name(f"payment_{suffix}_{order_id}")
+        for job in jobs:
+            job.schedule_removal()
 
     # Cancel order and restore stock
     cancel_expired_order(order_id)
@@ -681,4 +870,74 @@ async def handle_claim_warranty(update: Update, context: ContextTypes.DEFAULT_TY
         f"💬 Please type your message below describing the issue, and an agent will join the chat to help you shortly:"
     )
     await query.edit_message_text(text, parse_mode="Markdown")
+
+
+def get_payment_screen_text(order_id, product_name, price, pm_text, coupon_code=None, discount_amount=0.0, seconds_left=600):
+    coupon_info = ""
+    if coupon_code:
+        coupon_info = f"🎟️ Coupon Applied: `{coupon_code}` (-{format_price(discount_amount)})\n"
+
+    minutes = seconds_left // 60
+    seconds = seconds_left % 60
+    time_str = f"*{minutes}m {seconds:02d}s*"
+
+    return (
+        f"✅ *Order Created!*\n\n"
+        f"🆔 Order ID: `{order_id}`\n"
+        f"📦 {product_name}\n"
+        f"{coupon_info}"
+        f"💰 Amount: *{format_price(price)}*\n\n"
+        f"{'─' * 25}\n"
+        f"💳 *Payment Methods:*\n\n"
+        f"{pm_text}"
+        f"{'─' * 25}\n\n"
+        f"⏳ Time Remaining: {time_str}\n"
+        f"After payment, send your *Transaction Hash/ID* here."
+    )
+
+
+async def payment_countdown_job(context: ContextTypes.DEFAULT_TYPE):
+    """Update payment screen timer countdown."""
+    job = context.job
+    data = job.data
+    order_id = data["order_id"]
+    chat_id = data["chat_id"]
+    message_id = data["message_id"]
+    seconds_left = data["seconds_left"] - 60
+
+    # Check if order is still awaiting payment
+    from database import get_order_by_id
+    order = get_order_by_id(order_id)
+    if not order or order["status"] != "awaiting_payment":
+        job.schedule_removal()
+        return
+
+    if seconds_left <= 0:
+        job.schedule_removal()
+        return
+
+    data["seconds_left"] = seconds_left
+
+    text = get_payment_screen_text(
+        order_id=order_id,
+        product_name=data["product_name"],
+        price=data["price"],
+        pm_text=data["pm_text"],
+        coupon_code=data["coupon_code"],
+        discount_amount=data["discount_amount"],
+        seconds_left=seconds_left
+    )
+
+    try:
+        await context.bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            parse_mode="Markdown",
+            reply_markup=payment_screen_buttons(order_id)
+        )
+    except Exception as e:
+        logger.error(f"Failed to update payment countdown: {e}")
+        # If the message is deleted or cannot be edited, remove job to save resources
+        job.schedule_removal()
 

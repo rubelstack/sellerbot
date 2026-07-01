@@ -74,6 +74,15 @@ def init_db():
             created_at  TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS coupons (
+            code            TEXT PRIMARY KEY,
+            discount        REAL NOT NULL,
+            usage_limit     INTEGER NOT NULL DEFAULT 1,
+            used_count      INTEGER NOT NULL DEFAULT 0,
+            is_active       INTEGER NOT NULL DEFAULT 1,
+            created_at      TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_orders_chat_id ON orders(chat_id);
         CREATE INDEX IF NOT EXISTS idx_orders_order_id ON orders(order_id);
         CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
@@ -89,6 +98,16 @@ def init_db():
         cursor.execute("SELECT payment_status FROM orders LIMIT 1")
     except sqlite3.OperationalError:
         cursor.execute("ALTER TABLE orders ADD COLUMN payment_status TEXT NOT NULL DEFAULT 'awaiting_payment'")
+
+    try:
+        cursor.execute("SELECT coupon_code FROM orders LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE orders ADD COLUMN coupon_code TEXT DEFAULT ''")
+
+    try:
+        cursor.execute("SELECT discount_amount FROM orders LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("ALTER TABLE orders ADD COLUMN discount_amount REAL DEFAULT 0.0")
 
     conn.commit()
     conn.close()
@@ -223,7 +242,7 @@ def toggle_product_active(product_id: int):
 
 # ─── Order CRUD ──────────────────────────────────────────────────────
 
-def create_order(chat_id: int, product_id: int):
+def create_order(chat_id: int, product_id: int, coupon_code: str = None, discount_amount: float = 0.0):
     """
     Create a new order with status 'awaiting_payment'. Decrements stock.
     Returns (order_id, order_dict) or (None, error_message).
@@ -254,19 +273,26 @@ def create_order(chat_id: int, product_id: int):
     
     now = datetime.now().isoformat()
     
+    # Calculate discounted price
+    final_price = max(0.0, product["price"] - discount_amount)
+    
     # Create order and decrement stock
     conn.execute(
         """INSERT INTO orders 
            (order_id, chat_id, product_id, product_name, price, quantity,
             warranty_expiry, warranty_details, status, transaction_hash,
-            payment_status, created_at)
-           VALUES (?, ?, ?, ?, ?, 1, ?, ?, 'awaiting_payment', '', 'awaiting_payment', ?)""",
-        (order_id, chat_id, product_id, product["name"], product["price"],
-         warranty_expiry, product["warranty_details"], now),
+            payment_status, created_at, coupon_code, discount_amount)
+           VALUES (?, ?, ?, ?, ?, 1, ?, ?, 'awaiting_payment', '', 'awaiting_payment', ?, ?, ?)""",
+        (order_id, chat_id, product_id, product["name"], final_price,
+         warranty_expiry, product["warranty_details"], now, coupon_code or "", discount_amount),
     )
     conn.execute(
         "UPDATE products SET stock = stock - 1 WHERE id = ?", (product_id,)
     )
+    if coupon_code:
+        conn.execute(
+            "UPDATE coupons SET used_count = used_count + 1 WHERE code = ?", (coupon_code,)
+        )
     conn.commit()
     
     # Build order dict
@@ -274,7 +300,7 @@ def create_order(chat_id: int, product_id: int):
         "order_id": order_id,
         "product_name": product["name"],
         "product_id": product_id,
-        "price": product["price"],
+        "price": final_price,
         "warranty_expiry": warranty_expiry,
         "warranty_details": product["warranty_details"],
         "warranty_days": product["warranty_days"],
@@ -323,6 +349,11 @@ def reject_order_payment(order_id: str):
             "UPDATE products SET stock = stock + 1 WHERE id = ?",
             (order["product_id"],),
         )
+        if order["coupon_code"]:
+            conn.execute(
+                "UPDATE coupons SET used_count = MAX(0, used_count - 1) WHERE code = ?",
+                (order["coupon_code"],),
+            )
         conn.commit()
     conn.close()
 
@@ -343,6 +374,11 @@ def cancel_expired_order(order_id: str):
             "UPDATE products SET stock = stock + 1 WHERE id = ?",
             (order["product_id"],),
         )
+        if order["coupon_code"]:
+            conn.execute(
+                "UPDATE coupons SET used_count = MAX(0, used_count - 1) WHERE code = ?",
+                (order["coupon_code"],),
+            )
         conn.commit()
     conn.close()
     return order is not None
@@ -469,3 +505,49 @@ def toggle_payment_method(pm_id: int):
     conn.commit()
     conn.close()
     return new_status
+
+
+# ─── Coupon CRUD ─────────────────────────────────────────────────────
+
+def add_coupon(code: str, discount: float, usage_limit: int):
+    """Add a new coupon. Returns True if successful, False if already exists."""
+    conn = get_connection()
+    try:
+        conn.execute(
+            """INSERT INTO coupons (code, discount, usage_limit, used_count, is_active, created_at)
+               VALUES (?, ?, ?, 0, 1, ?)""",
+            (code.upper().strip(), discount, usage_limit, datetime.now().isoformat()),
+        )
+        conn.commit()
+        success = True
+    except sqlite3.IntegrityError:
+        success = False
+    finally:
+        conn.close()
+    return success
+
+
+def get_coupon(code: str):
+    """Get a coupon by its code (case-insensitive)."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM coupons WHERE UPPER(code) = UPPER(?) AND is_active = 1", (code.strip(),)
+    ).fetchone()
+    conn.close()
+    return row
+
+
+def get_all_coupons():
+    """Get all coupons."""
+    conn = get_connection()
+    rows = conn.execute("SELECT * FROM coupons ORDER BY created_at DESC").fetchall()
+    conn.close()
+    return rows
+
+
+def delete_coupon(code: str):
+    """Delete a coupon."""
+    conn = get_connection()
+    conn.execute("DELETE FROM coupons WHERE UPPER(code) = UPPER(?)", (code.strip(),))
+    conn.commit()
+    conn.close()

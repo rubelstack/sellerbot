@@ -31,8 +31,8 @@ def admin_keyboard():
     keyboard = [
         [KeyboardButton("➕ Add Product"), KeyboardButton("📦 Manage Products")],
         [KeyboardButton("📊 Inventory"), KeyboardButton("📋 Orders")],
-        [KeyboardButton("💳 Payment Methods"), KeyboardButton("📢 Broadcast")],
-        [KeyboardButton("👥 Users")],
+        [KeyboardButton("💳 Payment Methods"), KeyboardButton("🎟️ Coupons")],
+        [KeyboardButton("📢 Broadcast"), KeyboardButton("👥 Users")],
     ]
     return ReplyKeyboardMarkup(
         keyboard, resize_keyboard=True, one_time_keyboard=False
@@ -263,6 +263,40 @@ def claim_warranty_button(order_id: str):
                 "🛡️ Claim Warranty",
                 callback_data=f"claimw_{order_id}",
             )
+        ]
+    ])
+
+
+def coupon_options_keyboard(product_id: int):
+    """Inline buttons on the purchase option screen."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🎟️ Apply Coupon Code", callback_data=f"apply_coupon_{product_id}"),
+        ],
+        [
+            InlineKeyboardButton("💵 Buy without Coupon", callback_data=f"buy_no_coupon_{product_id}"),
+        ],
+        [
+            InlineKeyboardButton("« Back", callback_data=f"view_card_{product_id}"),
+        ]
+    ])
+
+
+def coupon_confirm_keyboard(product_id: int, coupon_code: str):
+    """Confirm purchase with coupon inline buttons."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Confirm Purchase", callback_data=f"conf_buy_cp_{product_id}_{coupon_code}"),
+            InlineKeyboardButton("❌ Cancel", callback_data="cancel_buy"),
+        ]
+    ])
+
+
+def coupon_management_keyboard(coupon_code: str):
+    """Inline buttons for managing a coupon."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🗑 Delete", callback_data=f"cpdel_{coupon_code}"),
         ]
     ])
 
