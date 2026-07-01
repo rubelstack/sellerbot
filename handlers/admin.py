@@ -25,6 +25,7 @@ from utils.keyboard import (
     product_manage_buttons, product_edit_buttons,
     order_status_buttons, delete_confirm_buttons,
     payment_method_manage_buttons, close_chat_keyboard,
+    admin_chat_only_button,
 )
 from utils.helpers import format_price, format_date
 
@@ -451,6 +452,16 @@ async def handle_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return True
     else:
         value = update.message.text.strip()
+        menu_buttons = {
+            "🛍 Products", "🛒 My Purchases", "🛡 Warranty", "💬 Help / Chat",
+            "➕ Add Product", "📦 Manage Products", "📊 Inventory", "📋 Orders",
+            "💳 Payment Methods", "📢 Broadcast", "👥 Users", "/start", "/admin"
+        }
+        if value in menu_buttons or value.startswith("/"):
+            context.user_data.pop("edit_product_id", None)
+            context.user_data.pop("edit_field", None)
+            context.user_data.pop("edit_is_image", None)
+            return False
 
         if field in ("price",):
             try:
@@ -761,7 +772,7 @@ async def show_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text(
             text, parse_mode="Markdown",
-            reply_markup=order_status_buttons(order["order_id"]),
+            reply_markup=order_status_buttons(order["order_id"], order["chat_id"]),
         )
 
 
@@ -778,6 +789,7 @@ async def handle_admin_confirm_payment(update: Update, context: ContextTypes.DEF
     await query.edit_message_text(
         query.message.text + "\n\n✅ *PAYMENT CONFIRMED*",
         parse_mode="Markdown",
+        reply_markup=admin_chat_only_button(order["chat_id"]) if order else None
     )
 
     # Notify customer
@@ -821,6 +833,7 @@ async def handle_admin_reject_payment(update: Update, context: ContextTypes.DEFA
     await query.edit_message_text(
         query.message.text + "\n\n❌ *PAYMENT REJECTED — Stock restored*",
         parse_mode="Markdown",
+        reply_markup=admin_chat_only_button(order["chat_id"]) if order else None
     )
 
     # Notify customer
@@ -878,7 +891,7 @@ async def handle_order_status_callback(update: Update, context: ContextTypes.DEF
     )
     await query.edit_message_text(
         text, parse_mode="Markdown",
-        reply_markup=order_status_buttons(order_id),
+        reply_markup=order_status_buttons(order_id, order["chat_id"]),
     )
 
     # Notify customer
@@ -1002,19 +1015,25 @@ async def forward_customer_message_to_admin(update: Update, context: ContextType
 
     user = update.effective_user
 
+    # Format customer full name and username for messages
+    cust_name = user.first_name
+    if user.last_name:
+        cust_name += f" {user.last_name}"
+    username_text = f" (@{user.username})" if user.username else ""
+
     try:
         if update.message.photo:
             photo = update.message.photo[-1]
             await context.bot.send_photo(
                 chat_id=ADMIN_CHAT_ID,
                 photo=photo.file_id,
-                caption=f"👤 *{user.first_name}:*\n{update.message.caption or ''}",
+                caption=f"👤 *{cust_name}{username_text}:*\n{update.message.caption or ''}",
                 parse_mode="Markdown",
             )
         elif update.message.text:
             await context.bot.send_message(
                 chat_id=ADMIN_CHAT_ID,
-                text=f"👤 *{user.first_name}:*\n{update.message.text}",
+                text=f"👤 *{cust_name}{username_text}:*\n{update.message.text}",
                 parse_mode="Markdown",
             )
         return True

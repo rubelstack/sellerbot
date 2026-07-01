@@ -78,3 +78,20 @@ def truncate_text(text: str, max_length: int = 100) -> str:
     if len(text) <= max_length:
         return text
     return text[:max_length - 3] + "..."
+
+
+def normalize_order_id(input_str: str) -> str:
+    """Normalize user order ID inputs (handle uppercase, spaces, and prefix/hyphen issues)."""
+    if not input_str:
+        return ""
+    from config import ORDER_PREFIX
+    s = input_str.strip().upper()
+    # Keep only alphanumeric characters
+    clean = "".join(c for c in s if c.isalnum())
+    prefix = ORDER_PREFIX.upper()
+    if clean.startswith(prefix):
+        suffix = clean[len(prefix):]
+        return f"{prefix}-{suffix}"
+    else:
+        return f"{prefix}-{clean}"
+

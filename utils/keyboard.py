@@ -129,8 +129,8 @@ def product_edit_buttons(product_id: int):
     ])
 
 
-def order_status_buttons(order_id: str):
-    """Inline buttons for admin to update order status."""
+def order_status_buttons(order_id: str, customer_chat_id: int):
+    """Inline buttons for admin to update order status and chat with customer."""
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("✅ Confirm", callback_data=f"oconfirm_{order_id}"),
@@ -139,7 +139,38 @@ def order_status_buttons(order_id: str):
         [
             InlineKeyboardButton("✔️ Complete", callback_data=f"ocomplete_{order_id}"),
         ],
+        [
+            InlineKeyboardButton(
+                "💬 Chat with Customer",
+                callback_data=f"achat_{customer_chat_id}",
+            ),
+        ],
     ])
+
+
+def admin_chat_only_button(customer_chat_id: int):
+    """Inline button to chat with customer only."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "💬 Chat with Customer",
+                callback_data=f"achat_{customer_chat_id}",
+            )
+        ]
+    ])
+
+
+def payment_screen_buttons(order_id: str):
+    """Inline buttons for payment screen (cancel order)."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "❌ Cancel Order",
+                callback_data=f"paycancel_{order_id}",
+            )
+        ]
+    ])
+
 
 
 def buy_confirm_button(product_id: int):

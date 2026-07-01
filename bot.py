@@ -17,7 +17,7 @@ from handlers.customer import (
     start_command, show_products, show_my_purchases,
     show_warranty, check_warranty_input,
     help_chat, forward_help_message,
-    handle_buy_callback, handle_confirm_buy, handle_cancel_buy,
+    handle_buy_callback,
     handle_tx_hash_input, handle_payment_done, handle_payment_cancel,
     handle_details_callback, handle_view_card_callback,
 )
@@ -179,10 +179,6 @@ async def handle_callback(update: Update, context):
         await handle_view_card_callback(update, context)
     elif data.startswith("buy_"):
         await handle_buy_callback(update, context)
-    elif data.startswith("confirm_buy_"):
-        await handle_confirm_buy(update, context)
-    elif data == "cancel_buy":
-        await handle_cancel_buy(update, context)
     elif data.startswith("paydone_"):
         await handle_payment_done(update, context)
     elif data.startswith("paycancel_"):
