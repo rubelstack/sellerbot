@@ -18,7 +18,7 @@ from utils.keyboard import (
     customer_keyboard, product_buy_button, buy_confirm_button,
     payment_done_button, admin_order_notification_buttons,
     product_details_back_button, admin_chat_only_button,
-    payment_screen_buttons,
+    payment_screen_buttons, claim_warranty_button,
 )
 from utils.helpers import (
     format_price, format_date, warranty_status_text, format_date_short,
@@ -538,8 +538,14 @@ async def check_warranty_input(update: Update, context: ContextTypes.DEFAULT_TYP
     if order["warranty_details"]:
         text += f"\n📋 *Terms:*\n{order['warranty_details']}"
 
+    # If warranty is active, show the Claim Warranty button
+    from utils.helpers import is_warranty_active
+    reply_markup = get_reply_keyboard(update.effective_user.id)
+    if is_warranty_active(order["warranty_expiry"]):
+        reply_markup = claim_warranty_button(order["order_id"])
+
     await update.message.reply_text(
-        text, parse_mode="Markdown", reply_markup=get_reply_keyboard(update.effective_user.id)
+        text, parse_mode="Markdown", reply_markup=reply_markup
     )
     return True
 
@@ -613,3 +619,65 @@ async def forward_help_message(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
     return True
+
+
+async def handle_claim_warranty(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle Claim Warranty button press — notify admin and prompt user for message."""
+    query = update.callback_query
+    await query.answer()
+
+    order_id = query.data.split("_")[1]
+    order = get_order_by_id(order_id)
+    user = query.from_user
+
+    if not order:
+        await query.message.reply_text("❌ Order not found.")
+        return
+
+    # Notify admin
+    cust_name = user.first_name
+    if user.last_name:
+        cust_name += f" {user.last_name}"
+    username_text = f" (@{user.username})" if user.username else ""
+
+    admin_msg = (
+        f"🚨 *Warranty Claim Request!*\n\n"
+        f"🆔 Order ID: `{order_id}`\n"
+        f"📦 Product: {order['product_name']}\n"
+        f"📅 Purchase Date: {format_date(order['created_at'])}\n"
+        f"📅 Expiry: {format_date_short(order['warranty_expiry'])}\n\n"
+        f"{'─' * 25}\n"
+        f"👤 *Customer Details:*\n"
+        f"  Name: {cust_name}\n"
+        f"  Username: {username_text or '@N/A'}\n"
+        f"  Chat ID: `{user.id}`\n"
+        f"{'─' * 25}"
+    )
+
+    try:
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+        chat_btn = InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                "💬 Chat with Customer",
+                callback_data=f"achat_{user.id}",
+            )]
+        ])
+        await context.bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text=admin_msg,
+            parse_mode="Markdown",
+            reply_markup=chat_btn,
+        )
+    except Exception as e:
+        logger.error(f"Failed to notify admin of warranty claim: {e}")
+
+    # Reply to customer
+    context.user_data["awaiting_help_message"] = True
+
+    text = (
+        f"🛡️ *Warranty Claim Initiated!*\n\n"
+        f"We have notified the support team regarding your warranty claim for order `{order_id}`.\n\n"
+        f"💬 Please type your message below describing the issue, and an agent will join the chat to help you shortly:"
+    )
+    await query.edit_message_text(text, parse_mode="Markdown")
+

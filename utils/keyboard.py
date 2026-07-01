@@ -253,3 +253,16 @@ def delete_confirm_buttons(product_id: int):
             InlineKeyboardButton("❌ No", callback_data=f"delcancel_{product_id}"),
         ]
     ])
+
+
+def claim_warranty_button(order_id: str):
+    """Inline button to claim warranty."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "🛡️ Claim Warranty",
+                callback_data=f"claimw_{order_id}",
+            )
+        ]
+    ])
+

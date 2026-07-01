@@ -20,6 +20,7 @@ from handlers.customer import (
     handle_buy_callback,
     handle_tx_hash_input, handle_payment_done, handle_payment_cancel,
     handle_details_callback, handle_view_card_callback,
+    handle_claim_warranty,
 )
 from handlers.admin import (
     admin_start, manage_products, show_inventory,
@@ -179,6 +180,8 @@ async def handle_callback(update: Update, context):
         await handle_view_card_callback(update, context)
     elif data.startswith("buy_"):
         await handle_buy_callback(update, context)
+    elif data.startswith("claimw_"):
+        await handle_claim_warranty(update, context)
     elif data.startswith("paydone_"):
         await handle_payment_done(update, context)
     elif data.startswith("paycancel_"):
