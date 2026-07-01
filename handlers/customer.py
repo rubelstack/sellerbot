@@ -69,9 +69,9 @@ def format_product_compact(product):
     """Format compact product card (Name, Price, Stock only)."""
     stock_status = f"🟢 {product['stock']} units available" if product["stock"] > 0 else "🔴 Out of Stock"
     return (
-        f"🛍️ *Product:* {product['name']}\n"
-        f"💵 *Price:* {format_price(product['price'])}\n"
-        f"📦 *Stock:* {stock_status}"
+        f"🛍️ <b>Product:</b> {html.escape(product['name'])}\n"
+        f"💵 <b>Price:</b> {format_price(product['price'])}\n"
+        f"📦 <b>Stock:</b> {stock_status}"
     )
 
 
@@ -79,12 +79,12 @@ def format_product_details(product):
     """Format full details view (Description & Warranty)."""
     desc = product['description'] if product['description'] else "No description available."
     warranty = f"🛡️ {product['warranty_days']} Days Warranty" if product['warranty_days'] > 0 else "🛡️ No Warranty"
-    warranty_info = f"\n📋 *Warranty Terms:*\n{product['warranty_details']}" if product['warranty_details'] else ""
+    warranty_info = f"\n📋 <b>Warranty Terms:</b>\n{html.escape(product['warranty_details'])}" if product['warranty_details'] else ""
     return (
-        f"🌟 *{product['name']} — Details*\n"
+        f"🌟 <b>{html.escape(product['name'])} — Details</b>\n"
         f"──────────────────────────\n"
-        f"📄 *Description:*\n_{desc}_\n\n"
-        f"🛡️ *Warranty:* {warranty}{warranty_info}"
+        f"📄 <b>Description:</b>\n<i>{html.escape(desc)}</i>\n\n"
+        f"🛡️ <b>Warranty:</b> {warranty}{warranty_info}"
     )
 
 
@@ -111,13 +111,13 @@ async def show_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_photo(
                     photo=photo,
                     caption=caption,
-                    parse_mode="Markdown",
+                    parse_mode="HTML",
                     reply_markup=markup,
                 )
         else:
             await update.message.reply_text(
                 caption,
-                parse_mode="Markdown",
+                parse_mode="HTML",
                 reply_markup=markup,
             )
 
@@ -140,13 +140,13 @@ async def handle_details_callback(update: Update, context: ContextTypes.DEFAULT_
         if query.message.photo:
             await query.edit_message_caption(
                 caption=text,
-                parse_mode="Markdown",
+                parse_mode="HTML",
                 reply_markup=product_details_back_button(product_id)
             )
         else:
             await query.edit_message_text(
                 text=text,
-                parse_mode="Markdown",
+                parse_mode="HTML",
                 reply_markup=product_details_back_button(product_id)
             )
     except Exception:
@@ -171,13 +171,13 @@ async def handle_view_card_callback(update: Update, context: ContextTypes.DEFAUL
         if query.message.photo:
             await query.edit_message_caption(
                 caption=text,
-                parse_mode="Markdown",
+                parse_mode="HTML",
                 reply_markup=product_buy_button(product_id)
             )
         else:
             await query.edit_message_text(
                 text=text,
-                parse_mode="Markdown",
+                parse_mode="HTML",
                 reply_markup=product_buy_button(product_id)
             )
     except Exception:
