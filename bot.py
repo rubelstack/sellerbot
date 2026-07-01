@@ -60,6 +60,7 @@ async def handle_message(update: Update, context):
 
     user = update.effective_user
     text = update.message.text.strip()
+    btn_text = text.replace("\ufe0f", "")
     user_id = user.id
 
     # Register user
@@ -69,7 +70,7 @@ async def handle_message(update: Update, context):
     # Admin active chat session
     if is_admin(user_id):
         # Admin wants to close chat
-        if text == "🔚 Close Chat":
+        if btn_text == "🔚 Close Chat":
             await close_admin_chat(update, context)
             return
         
@@ -109,30 +110,30 @@ async def handle_message(update: Update, context):
 
     # ─── Admin button routing ───
     if is_admin(user_id):
-        if text == "📦 Manage Products":
+        if btn_text == "📦 Manage Products":
             await manage_products(update, context)
             return
-        elif text == "📊 Inventory":
+        elif btn_text == "📊 Inventory":
             await show_inventory(update, context)
             return
-        elif text == "📋 Orders":
+        elif btn_text == "📋 Orders":
             await show_orders(update, context)
             return
-        elif text == "💳 Payment Methods":
+        elif btn_text == "💳 Payment Methods":
             await show_payment_methods(update, context)
             return
-        elif text == "👥 Users":
+        elif btn_text == "👥 Users":
             await show_users(update, context)
             return
 
     # ─── Customer button routing ───
-    if text == "🛍 Products":
+    if btn_text == "🛍 Products":
         await show_products(update, context)
-    elif text == "🛒 My Purchases":
+    elif btn_text == "🛒 My Purchases":
         await show_my_purchases(update, context)
-    elif text == "🛡 Warranty":
+    elif btn_text == "🛡 Warranty":
         await show_warranty(update, context)
-    elif text == "💬 Help / Chat":
+    elif btn_text == "💬 Help / Chat":
         await help_chat(update, context)
     else:
         # Unknown text — show appropriate keyboard
