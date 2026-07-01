@@ -5,6 +5,7 @@ Made by Rubel
 """
 
 import os
+import html
 import logging
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -512,9 +513,9 @@ async def check_warranty_input(update: Update, context: ContextTypes.DEFAULT_TYP
     order = get_order_by_id(order_id)
     if not order:
         await update.message.reply_text(
-            f"❌ No order found with ID `{order_id_raw}`.\n\n"
+            f"❌ No order found with ID <code>{html.escape(order_id_raw)}</code>.\n\n"
             "Please check the ID and try again, or click a button below to cancel: 👇",
-            parse_mode="Markdown",
+            parse_mode="HTML",
             reply_markup=get_reply_keyboard(update.effective_user.id),
         )
         # Keep awaiting_warranty_check = True so they can retry
@@ -527,16 +528,16 @@ async def check_warranty_input(update: Update, context: ContextTypes.DEFAULT_TYP
     warranty_expiry = format_date_short(order["warranty_expiry"]) if order["warranty_expiry"] else "N/A"
 
     text = (
-        f"🛡 *Warranty Details*\n\n"
-        f"🆔 Order: `{order['order_id']}`\n"
-        f"📦 Product: {order['product_name']}\n"
+        f"🛡 <b>Warranty Details</b>\n\n"
+        f"🆔 Order: <code>{order['order_id']}</code>\n"
+        f"📦 Product: {html.escape(order['product_name'])}\n"
         f"📅 Purchase Date: {format_date(order['created_at'])}\n"
         f"📅 Warranty Expires: {warranty_expiry}\n"
         f"📊 Status: {warranty}\n"
     )
 
     if order["warranty_details"]:
-        text += f"\n📋 *Terms:*\n{order['warranty_details']}"
+        text += f"\n📋 <b>Terms:</b>\n{html.escape(order['warranty_details'])}"
 
     # If warranty is active, show the Claim Warranty button
     from utils.helpers import is_warranty_active
@@ -545,7 +546,7 @@ async def check_warranty_input(update: Update, context: ContextTypes.DEFAULT_TYP
         reply_markup = claim_warranty_button(order["order_id"])
 
     await update.message.reply_text(
-        text, parse_mode="Markdown", reply_markup=reply_markup
+        text, parse_mode="HTML", reply_markup=reply_markup
     )
     return True
 
